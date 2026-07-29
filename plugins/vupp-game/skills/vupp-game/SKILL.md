@@ -154,21 +154,61 @@ Two things in the result that are easy to misread:
 
 If the pictures show something wrong, fix it and play it again.
 
-### 6. Hand it over
+### 6. Let them play it — always offer this
+
+A scripted playtest tells you the game *works*. It cannot tell you whether it is
+any **fun**, and that is the only question that actually matters. So a build is
+not finished when the frames look right; it is finished when the person who
+asked for it has had their hands on the buttons.
+
+**Always offer this, without being asked.** Two routes — give the second one
+whenever the game is for somebody who is not sitting at this computer:
+
+```
+vupp play
+```
+
+Serves the game and prints a URL to open. Real keyboard (arrows move, `Z` is A,
+`X` is B, `Enter` is START), an on-screen pad for phones and touch, and **it
+reloads every time you edit a file** — so they can play, say "the frog is too
+slow", and be playing the fix seconds later without restarting anything. It
+keeps running until Ctrl+C. It prints a URL rather than only opening a window,
+so it works over SSH and inside containers too.
 
 ```
 vupp package -o frog-hop.zip --author "Grandma" --note "for Sam"
 ```
 
-That zip goes to a parent, who opens it in the Vupp app, plays it, and decides
-whether it goes on their child's device. **You cannot publish it and neither
-can this CLI** — putting an app on a child's device is a parent-only action, on
-purpose. Say that plainly when you hand the zip over rather than leaving them
-looking for a deploy step.
+Then send that file along with **<https://nicholasareed.github.io/vupp-sdk/play/>**
+— they drop the zip onto that page and play immediately, with nothing installed
+and no account. The zip is unpacked in their own browser and never uploaded
+anywhere. This is the route for a grandparent, a therapist, or a parent who is
+somewhere else.
 
-Finish with a short reply in plain language: what it is, what to press, and one
-thing you chose that they might want changed. If they cannot code, do not
-mention file names, function names or Lua.
+To put it on a real device the zip goes into the Vupp phone app and a parent
+publishes it from there. **You cannot publish it and neither can this CLI** —
+that is a parent-only action, on purpose. Say so plainly rather than leaving
+them hunting for a deploy step.
+
+#### How to end the build
+
+Finish with a short reply in plain language: what it is, what to press, one
+thing you chose that they might want changed — and then **ask whether they want
+to play it now**. If they cannot code, do not mention file names, function names
+or Lua.
+
+Something like:
+
+> Frog Hop is ready. Logs drift across the river and A hops the frog between
+> them; miss one and there is a splash and a giggle, then straight back on. I
+> made the logs fairly slow so a four-year-old can land them — easy to speed up.
+>
+> **Want to play it now?** I will start it and give you a link. Anything you
+> want changed I can do while you are still playing.
+
+If they say yes, run `vupp play`, then tell them the URL and the controls. When
+they come back with "it is too fast" or "make the frog blue", just change it —
+the page reloads on its own, so they never have to stop playing.
 
 ## Things that will bite you
 

@@ -1142,6 +1142,10 @@ function progress(ctx, message) {
   if (!ctx.quiet && !process.env.VUPP_NO_PROGRESS) process.stderr.write(`  ${message}
 `);
 }
+function warn(message) {
+  process.stderr.write(`${message}
+`);
+}
 
 // src/sim/assets.ts
 import { createHash } from "crypto";
@@ -6041,23 +6045,428 @@ async function cmdPackage(ctx, dir, opts) {
   await writeFile3(out, bytes);
   emit(
     ctx,
-    { ok: true, path: out, title, bytes: bytes.length, files: Object.keys(files).sort() },
+    {
+      ok: true,
+      path: out,
+      title,
+      bytes: bytes.length,
+      files: Object.keys(files).sort(),
+      play_url: PLAY_URL,
+      // The zip is not the end of the job. Somebody still has to find out
+      // whether a child enjoys it, and that cannot be checked from here — so
+      // the result says how, in the words to hand over.
+      next: `Tell them the game is ready, and OFFER to let them play it now \u2014 give both routes: run \`vupp play\` for a link they open immediately, or send them ${out} and ${PLAY_URL} where they drop the file in and play with nothing installed. Then ask what they want changed, and iterate.`
+    },
     () => [
       `Wrote ${out} (${Math.round(bytes.length / 102.4) / 10} KB)`,
       "",
-      "Send it to a parent. In the Vupp app: Studio > Import, then Publish to put it",
-      "on the device \u2014 publishing is a parent-only step by design."
+      "Play it now:      vupp play",
+      `Or send the zip:  ${PLAY_URL}  (they drop it in \u2014 nothing to install)`,
+      "",
+      "To put it on a device: open the zip in the Vupp app and publish from there.",
+      "Publishing is a parent-only step by design."
     ].join("\n")
   );
   return 0;
 }
+var PLAY_URL = "https://nicholasareed.github.io/vupp-sdk/play/";
 function safeName(title) {
   return title.replace(/[^A-Za-z0-9 _-]/g, "").trim() || "vupp-app";
 }
 
-// src/commands/playtest.ts
-import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile4 } from "fs/promises";
-import { join as join5, resolve as resolve5 } from "path";
+// src/commands/play.ts
+import { spawn } from "child_process";
+import { createHash as createHash2 } from "crypto";
+import { watch as fsWatch } from "fs";
+import { resolve as resolve5 } from "path";
+
+// src/sim/playShell.ts
+var CSS = `
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #0b0e14; color: #e6e8eb;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 16px 12px 28px; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  }
+  #name { font-weight: 600; font-size: 15px; }
+  #status { min-height: 1.4em; font-size: 12.5px; color: #9aa3ad; text-align: center; max-width: 34rem; }
+  #status.bad { color: #ff8f7a; }
+  #screen-area {
+    position: relative; background: #000; border-radius: 10px; overflow: hidden;
+    width: min(86vw, 320px); aspect-ratio: 320 / 480;
+    display: flex; align-items: center; justify-content: center;
+  }
+  canvas { display: block; image-rendering: pixelated; touch-action: none; outline: none; }
+  #boot {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #6b7480; font-size: 13px; text-align: center; padding: 1rem;
+  }
+  #boot.hidden { display: none; }
+  #pad { display: flex; align-items: center; justify-content: space-between; width: min(92vw, 340px); }
+  .dpad { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); }
+  .key {
+    display: flex; align-items: center; justify-content: center;
+    background: #1a1f29; border: 1px solid #2b323d; border-radius: 8px;
+    font-weight: 700; color: #cbd3dc; touch-action: none; cursor: pointer;
+  }
+  .key.on { background: #3b82f6; color: #fff; }
+  .dpad .key { margin: 2px; }
+  .round { width: 54px; height: 54px; border-radius: 50%; font-size: 16px; }
+  .actions { display: flex; gap: 12px; align-items: center; }
+  #system { display: flex; gap: 10px; }
+  #system .key, #tools button, #drop button {
+    height: 30px; padding: 0 12px; font-size: 11px; letter-spacing: .06em;
+  }
+  #tools { display: flex; gap: 10px; }
+  #tools button, #drop button {
+    background: #151a22; border: 1px solid #2b323d; border-radius: 8px; color: #9aa3ad;
+    cursor: pointer; font-family: inherit;
+  }
+  #tools button:hover, #drop button:hover { color: #e6e8eb; }
+  kbd { background: #1a1f29; border: 1px solid #2b323d; border-radius: 4px; padding: 0 4px; font-size: 11px; }
+  #help { color: #6b7480; font-size: 12px; text-align: center; }
+  #drop {
+    width: min(92vw, 420px); border: 1px dashed #2b323d; border-radius: 10px;
+    padding: 18px; text-align: center; color: #9aa3ad; font-size: 13px;
+  }
+  #drop.over { border-color: #3b82f6; color: #e6e8eb; }
+  #drop.done { display: none; }
+  a { color: #7aa7ff; }
+`;
+var BODY = (mode) => `
+  <div id="name">Vupp</div>
+  <div id="screen-area">
+    <canvas id="canvas"></canvas>
+    <div id="boot">Starting the Vupp\u2026</div>
+  </div>
+  <div id="status">${mode === "zip" ? "Choose a game to play." : "Starting the Vupp\u2026"}</div>
+${mode === "zip" ? `
+  <div id="drop">
+    <p style="margin:0 0 10px">Drop the game's <strong>.zip</strong> here, or</p>
+    <button id="pick" type="button">CHOOSE A FILE</button>
+    <input id="file" type="file" accept=".zip,application/zip" hidden />
+  </div>
+` : ""}
+  <div id="pad">
+    <div class="dpad">
+      <div></div><div class="key" data-btn="up">&#9650;</div><div></div>
+      <div class="key" data-btn="left">&#9664;</div><div></div><div class="key" data-btn="right">&#9654;</div>
+      <div></div><div class="key" data-btn="down">&#9660;</div><div></div>
+    </div>
+    <div class="actions">
+      <div class="key round" data-btn="b">B</div>
+      <div class="key round" data-btn="a">A</div>
+    </div>
+  </div>
+
+  <div id="system">
+    <div class="key" data-btn="select">SELECT</div>
+    <div class="key" data-btn="start">START</div>
+  </div>
+
+  <div id="tools">
+    <button id="restart" type="button">Restart</button>
+    <button id="fresh" type="button">Start over (clear saves)</button>
+  </div>
+
+  <div id="help">
+    <kbd>&#8592;</kbd><kbd>&#8593;</kbd><kbd>&#8594;</kbd><kbd>&#8595;</kbd> move &nbsp;
+    <kbd>Z</kbd> A &nbsp; <kbd>X</kbd> B &nbsp; <kbd>Enter</kbd> START &nbsp; <kbd>Shift</kbd> SELECT
+    ${mode === "cli" ? "<br />Edits to the game reload here automatically." : ""}
+  </div>
+`;
+var SHARED_JS = `
+const PAD = { up:1, down:2, left:4, right:8, a:16, b:32, start:64, select:128 }
+const KEYS = {
+  ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right',
+  KeyW:'up', KeyS:'down', KeyA:'left', KeyD:'right',
+  KeyZ:'a', KeyX:'b', Space:'a',
+  Enter:'start', ShiftLeft:'select', ShiftRight:'select',
+}
+
+/* bridge.js reports upward through window.ReactNativeWebView.postMessage. In
+ * the phone app that is the WebView bridge; here it is just this function. */
+const listeners = []
+window.ReactNativeWebView = {
+  postMessage: (raw) => {
+    let msg
+    try { msg = JSON.parse(raw) } catch { return }
+    for (const fn of listeners) fn(msg)
+  },
+}
+const post = (msg) => window.__vuppBridge && window.__vuppBridge.receive(msg)
+
+function status(text, bad) {
+  const el = document.getElementById('status')
+  if (!el) return
+  el.textContent = text
+  el.className = bad ? 'bad' : ''
+}
+function setName(title) {
+  document.title = title ? title + ' \u2014 Vupp' : 'Vupp'
+  const el = document.getElementById('name')
+  if (el) el.textContent = title || 'Vupp'
+}
+
+let started = false
+listeners.push((msg) => {
+  if (msg.type === 'ready') { started = true; onReady() }
+  else if (msg.type === 'running') status('Playing ' + (msg.title || '') + ' \u2014 arrows to move, Z and X for A and B')
+  else if (msg.type === 'crash') status('It crashed in ' + msg.where + ': ' + msg.message, true)
+  else if (msg.type === 'refused') status('The engine would not start it: ' + msg.reason, true)
+})
+
+/* --- input ----------------------------------------------------------------
+ * The sim polls the pad every ~30ms, so a tap shorter than that is never
+ * observed. Every release is held back to MIN_PRESS_MS, the same discipline the
+ * phone app and the scripted playtest both apply. */
+const MIN_PRESS_MS = 80
+let mask = 0
+const pressedAt = {}
+const push = () => post({ type: 'pad', mask })
+
+function down(button) {
+  if (!button || (mask & PAD[button])) return
+  pressedAt[button] = Date.now()
+  mask |= PAD[button]
+  push()
+}
+function up(button) {
+  if (!button || !(mask & PAD[button])) return
+  const clear = () => { mask &= ~PAD[button]; push() }
+  const held = Date.now() - (pressedAt[button] || 0)
+  if (held < MIN_PRESS_MS) setTimeout(clear, MIN_PRESS_MS - held)
+  else clear()
+}
+
+addEventListener('keydown', (e) => {
+  const b = KEYS[e.code]
+  if (!b) return
+  e.preventDefault()
+  if (!e.repeat) down(b)
+})
+addEventListener('keyup', (e) => {
+  const b = KEYS[e.code]
+  if (!b) return
+  e.preventDefault()
+  up(b)
+})
+/* Leaving the tab mid-press would otherwise wedge a button down forever. */
+addEventListener('blur', () => { if (mask) { mask = 0; push() } })
+
+for (const el of document.querySelectorAll('[data-btn]')) {
+  const b = el.dataset.btn
+  const press = (e) => { e.preventDefault(); el.classList.add('on'); down(b) }
+  const release = (e) => { e.preventDefault(); el.classList.remove('on'); up(b) }
+  el.addEventListener('pointerdown', press)
+  el.addEventListener('pointerup', release)
+  el.addEventListener('pointercancel', release)
+  el.addEventListener('pointerleave', release)
+}
+
+/* Touch on the screen itself \u2014 apps declaring the "touch" capability read this.
+ * Coordinates are the 320x480 panel space the firmware expects. */
+const screenCanvas = document.getElementById('canvas')
+function panelXY(e) {
+  const r = screenCanvas.getBoundingClientRect()
+  return {
+    x: Math.round(((e.clientX - r.left) / r.width) * 320),
+    y: Math.round(((e.clientY - r.top) / r.height) * 480),
+  }
+}
+screenCanvas.addEventListener('pointerdown', (e) => {
+  const p = panelXY(e); post({ type: 'touch', x: p.x, y: p.y, down: true })
+})
+screenCanvas.addEventListener('pointermove', (e) => {
+  if (e.buttons) { const p = panelXY(e); post({ type: 'touch', x: p.x, y: p.y, down: true }) }
+})
+addEventListener('pointerup', (e) => {
+  const p = panelXY(e); post({ type: 'touch', x: p.x, y: p.y, down: false })
+})
+
+document.getElementById('restart').addEventListener('click', () => {
+  post({ type: 'relaunch' }); status('Restarted')
+})
+document.getElementById('fresh').addEventListener('click', () => {
+  post({ type: 'reset_store' }); post({ type: 'relaunch' })
+  status('Started over with the saved progress cleared')
+})
+`;
+var CLI_LOADER = `
+let version = null
+
+async function load(reason) {
+  const project = await (await fetch('/__vupp/app.json', { cache: 'no-store' })).json()
+  version = project.version
+  setName(project.title)
+  status(reason)
+  post({ type: 'write_and_run', files: project.files })
+}
+
+/* A websocket would be tidier, but this page is frequently opened through an
+ * SSH tunnel or a container port forward, and a poll survives things a socket
+ * does not. */
+async function watch() {
+  try {
+    const next = (await (await fetch('/__vupp/version', { cache: 'no-store' })).json()).version
+    if (started && next !== version) await load('Reloading \u2014 the game changed')
+  } catch { /* the CLI stopped; keep playing what is loaded */ }
+  setTimeout(watch, 700)
+}
+
+function onReady() { load('Loading the game\u2026').then(watch) }
+`;
+var ZIP_LOADER = `
+/* Minimal zip reader. The archive is written by fflate at level 6, so entries
+ * are raw deflate or stored; DecompressionStream handles the former natively,
+ * which keeps this page dependency-free. */
+async function unzip(buffer) {
+  const view = new DataView(buffer)
+  const bytes = new Uint8Array(buffer)
+
+  /* End of central directory: scan back for the signature, since the comment
+   * field at the tail is variable length. */
+  let eocd = -1
+  for (let i = bytes.length - 22; i >= 0 && i > bytes.length - 65558; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break }
+  }
+  if (eocd < 0) throw new Error('That file is not a zip.')
+
+  const count = view.getUint16(eocd + 10, true)
+  let p = view.getUint32(eocd + 16, true)
+  const out = {}
+  const decoder = new TextDecoder()
+
+  for (let i = 0; i < count; i++) {
+    if (view.getUint32(p, true) !== 0x02014b50) throw new Error('That zip is damaged.')
+    const method = view.getUint16(p + 10, true)
+    const compressed = view.getUint32(p + 20, true)
+    const nameLen = view.getUint16(p + 28, true)
+    const extraLen = view.getUint16(p + 30, true)
+    const commentLen = view.getUint16(p + 32, true)
+    const localAt = view.getUint32(p + 42, true)
+    const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLen))
+    p += 46 + nameLen + extraLen + commentLen
+
+    /* The local header repeats the name and extra lengths, and they are NOT
+     * always the same as the central directory's \u2014 the data starts after the
+     * local copy. */
+    const lNameLen = view.getUint16(localAt + 26, true)
+    const lExtraLen = view.getUint16(localAt + 28, true)
+    const start = localAt + 30 + lNameLen + lExtraLen
+    const raw = bytes.subarray(start, start + compressed)
+
+    if (name.endsWith('/')) continue
+    let data
+    if (method === 0) data = raw
+    else if (method === 8) {
+      const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+      data = new Uint8Array(await new Response(stream).arrayBuffer())
+    } else throw new Error('That zip uses a compression this page cannot read.')
+    out[name] = decoder.decode(data)
+  }
+  return out
+}
+
+/* Desktop zip tools wrap the contents in a folder named after it, so a game
+ * zipped by hand arrives as "Frog Hop/app.json". Peel one common prefix \u2014 the
+ * same forgiveness the phone app's importer applies, and the single most likely
+ * way this fails in someone's hands otherwise. */
+function unwrap(files) {
+  const names = Object.keys(files).filter((n) => !n.startsWith('__MACOSX/') && !n.includes('/.'))
+  if (!names.length) return files
+  const slash = names[0].indexOf('/')
+  if (slash < 0) return files
+  const prefix = names[0].slice(0, slash + 1)
+  if (!names.every((n) => n.startsWith(prefix))) return files
+  const out = {}
+  for (const n of names) out[n.slice(prefix.length)] = files[n]
+  return out
+}
+
+const SOURCE = /^(app\\.json|main\\.lua|lib\\/[A-Za-z0-9_-]+\\.lua)$/
+let pending = null
+
+async function loadZip(file) {
+  try {
+    status('Opening ' + file.name + '\u2026')
+    const all = unwrap(await unzip(await file.arrayBuffer()))
+    const files = {}
+    for (const [name, body] of Object.entries(all)) if (SOURCE.test(name)) files[name] = body
+    if (!files['app.json'] || !files['main.lua']) {
+      throw new Error("That zip doesn't have a Vupp game in it.")
+    }
+    let title = 'Vupp'
+    try { title = JSON.parse(files['app.json']).title || title } catch {}
+    setName(title)
+    document.getElementById('drop').classList.add('done')
+
+    if (started) { status('Loading ' + title + '\u2026'); post({ type: 'write_and_run', files }) }
+    else { pending = files; status('Loading ' + title + '\u2026') }
+  } catch (err) {
+    status(err.message || String(err), true)
+  }
+}
+
+function onReady() {
+  if (pending) { post({ type: 'write_and_run', files: pending }); pending = null }
+  else status('Choose a game to play.')
+}
+
+const drop = document.getElementById('drop')
+const input = document.getElementById('file')
+document.getElementById('pick').addEventListener('click', () => input.click())
+input.addEventListener('change', () => { if (input.files[0]) loadZip(input.files[0]) })
+for (const type of ['dragenter', 'dragover']) {
+  addEventListener(type, (e) => { e.preventDefault(); drop.classList.add('over') })
+}
+addEventListener('dragleave', () => drop.classList.remove('over'))
+addEventListener('drop', (e) => {
+  e.preventDefault()
+  drop.classList.remove('over')
+  const file = e.dataTransfer.files[0]
+  if (file) loadZip(file)
+})
+`;
+function playShellJs(mode) {
+  return `;(() => {
+${SHARED_JS}
+${mode === "cli" ? CLI_LOADER : ZIP_LOADER}
+})()
+`;
+}
+function playShellHtml(mode, { assetBase = "" } = {}) {
+  const base = assetBase ? `${assetBase.replace(/\/+$/, "")}/` : "";
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>${mode === "zip" ? "Play a Vupp game" : "Vupp"}</title>
+<link rel="icon" href="data:," />
+<style>${CSS}</style>
+</head>
+<body>
+${BODY(mode)}
+<script src="${base}bridge.js"></script>
+${base ? `<!-- Emscripten resolves vupp_sim.wasm and vupp_sim.data against the PAGE
+     url, not against the script it was loaded from, so serving the runtime
+     from a different directory 404s on the data file with the sim never
+     booting. bridge.js has already declared Module by this point; both this
+     and play.js are parser-blocking, so they are guaranteed to run before the
+     async runtime tag below is even reached.
+-->
+<script>Module.locateFile = (path) => '${base}' + path</script>` : ""}
+<script src="play.js"></script>
+<script async src="${base}vupp_sim.js"></script>
+</body>
+</html>
+`;
+}
+var PLAY_SHELL_HTML = playShellHtml("cli");
+var PLAY_SHELL_JS = playShellJs("cli");
 
 // src/sim/serve.ts
 import { createReadStream } from "fs";
@@ -6071,10 +6480,21 @@ var TYPES = {
   ".data": "application/octet-stream",
   ".json": "application/json; charset=utf-8"
 };
-async function serveAssets(dir) {
+async function serveAssets(dir, overlay = {}, { port = 0, host = "127.0.0.1" } = {}) {
   const server = createServer((req, res) => {
     const raw = decodeURIComponent((req.url ?? "/").split("?")[0] ?? "/");
     const rel = normalize(raw === "/" ? "/index.html" : raw).replace(/^(\.\.[/\\])+/, "");
+    const overlaid = overlay[`/${rel}`] ?? overlay[rel];
+    if (overlaid) {
+      const body = typeof overlaid.body === "string" ? Buffer.from(overlaid.body, "utf8") : overlaid.body;
+      res.writeHead(200, {
+        "content-type": overlaid.type,
+        "content-length": body.byteLength,
+        "cache-control": "no-store"
+      });
+      res.end(body);
+      return;
+    }
     const file = join4(dir, rel);
     if (!file.startsWith(dir)) {
       res.writeHead(403).end("forbidden");
@@ -6097,18 +6517,123 @@ async function serveAssets(dir) {
   });
   await new Promise((ok, fail) => {
     server.once("error", fail);
-    server.listen(0, "127.0.0.1", ok);
+    server.listen(port, host, ok);
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("asset server did not bind a port");
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    port: address.port,
+    url: `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${address.port}`,
     close: () => new Promise((ok) => {
       server.closeAllConnections?.();
       server.close(() => ok());
     })
   };
 }
+
+// src/commands/play.ts
+async function cmdPlay(ctx, dir, opts) {
+  const root = resolve5(dir);
+  let files = await readProject(root);
+  const checked = lint(files);
+  if (!checked.ok) {
+    emit(
+      ctx,
+      { ok: false, where: "check", error: lintFailure(checked) },
+      () => lintFailure(checked)
+    );
+    return 1;
+  }
+  const assets = await resolveSimAssets({ onProgress: (m) => progress(ctx, m) });
+  let version = hash(files);
+  let title = titleOf(files);
+  const server = await serveAssets(
+    assets.dir,
+    {
+      // Overlaid ahead of the simulator's own chrome-free index.html, which has
+      // no buttons because the phone app draws them.
+      "/index.html": { body: PLAY_SHELL_HTML, type: "text/html; charset=utf-8" },
+      "/play.js": { body: PLAY_SHELL_JS, type: "text/javascript; charset=utf-8" },
+      get "/__vupp/app.json"() {
+        return { body: JSON.stringify({ title, version, files }), type: "application/json" };
+      },
+      get "/__vupp/version"() {
+        return { body: JSON.stringify({ version }), type: "application/json" };
+      }
+    },
+    { port: opts.port ?? 0, host: opts.host ?? "0.0.0.0" }
+  );
+  let debounce = null;
+  const watcher = fsWatch(root, { recursive: true }, () => {
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(async () => {
+      try {
+        const next = await readProject(root);
+        const nextHash = hash(next);
+        if (nextHash === version) return;
+        const result = lint(next);
+        if (!result.ok) {
+          warn(`
+${lintFailure(result)}
+`);
+          return;
+        }
+        files = next;
+        title = titleOf(next);
+        version = nextHash;
+        progress(ctx, `reloaded \u2014 ${title}`);
+      } catch {
+      }
+    }, 250);
+  });
+  const url = server.url;
+  emit(
+    ctx,
+    { ok: true, url, port: server.port, title, watching: root },
+    () => [
+      "",
+      `  Play it:  ${url}`,
+      "",
+      `  ${title} \u2014 arrows move, Z is A, X is B, Enter is START.`,
+      "  Edits reload automatically. Press Ctrl+C when you are done.",
+      ""
+    ].join("\n")
+  );
+  if (opts.open !== false) openBrowser(url);
+  await new Promise((done) => {
+    const stop = () => {
+      watcher.close();
+      void server.close().then(done);
+    };
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+  });
+  return 0;
+}
+function hash(files) {
+  const h = createHash2("sha256");
+  for (const path of Object.keys(files).sort())
+    h.update(path).update("\0").update(files[path] ?? "");
+  return h.digest("hex").slice(0, 12);
+}
+function openBrowser(url) {
+  const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+  try {
+    const child = spawn(cmd, [url], {
+      stdio: "ignore",
+      detached: true,
+      shell: process.platform === "win32"
+    });
+    child.on("error", () => {
+    });
+    child.unref();
+  } catch {
+  }
+}
+
+// src/commands/playtest.ts
+import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile4 } from "fs/promises";
+import { join as join5, resolve as resolve6 } from "path";
 
 // src/sim/driver.ts
 var CRASH_GRACE_MS = 700;
@@ -6171,7 +6696,7 @@ var SimSession = class _SimSession {
    * beyond a sim that never answers.
    */
   awaitBoot() {
-    return new Promise((resolve6, reject) => {
+    return new Promise((resolve7, reject) => {
       const deadline = setTimeout(
         () => reject(new Error("the simulator never finished booting")),
         BOOT_TIMEOUT_MS
@@ -6183,7 +6708,7 @@ var SimSession = class _SimSession {
       this.onBooted = () => {
         clearTimeout(deadline);
         clearInterval(poll);
-        resolve6();
+        resolve7();
       };
     });
   }
@@ -6313,9 +6838,9 @@ var SimSession = class _SimSession {
   async writeAndRun(files) {
     this.settle({ ok: false, error: "superseded by a newer build" });
     this.running = null;
-    const result = new Promise((resolve6) => {
+    const result = new Promise((resolve7) => {
       this.pending = {
-        resolve: resolve6,
+        resolve: resolve7,
         timeout: setTimeout(
           () => this.settle({ ok: false, error: "the device never finished starting up" }),
           RUN_TIMEOUT_MS
@@ -6334,9 +6859,9 @@ var SimSession = class _SimSession {
    */
   async playtest(steps) {
     this.settlePlay({ ok: false, error: "superseded by a newer playtest" });
-    const result = new Promise((resolve6) => {
+    const result = new Promise((resolve7) => {
       this.playing = {
-        resolve: resolve6,
+        resolve: resolve7,
         timeout: setTimeout(
           () => this.settlePlay({ ok: false, error: "the playtest did not finish" }),
           PLAYTEST_TIMEOUT_MS
@@ -6360,11 +6885,11 @@ var SimSession = class _SimSession {
   }
   /** One PNG of the 160x240 app canvas, base64, no data: prefix. */
   async shot() {
-    const shot = new Promise((resolve6, reject) => {
+    const shot = new Promise((resolve7, reject) => {
       const timeout = setTimeout(() => reject(new Error("the screenshot never arrived")), 1e4);
       this.onShot = (png) => {
         clearTimeout(timeout);
-        resolve6(png);
+        resolve7(png);
       };
     });
     await this.send({ type: "shot" });
@@ -6404,7 +6929,7 @@ async function cmdPlaytest(ctx, dir, opts) {
     );
     return 1;
   }
-  const framesDir = resolve5(opts.outDir ?? join5(dir, ".vupp", "frames"));
+  const framesDir = resolve6(opts.outDir ?? join5(dir, ".vupp", "frames"));
   const assets = await resolveSimAssets({ onProgress: (m) => progress(ctx, m) });
   const sim = await SimSession.start({
     assetsDir: assets.dir,
@@ -6448,7 +6973,7 @@ async function cmdPlaytest(ctx, dir, opts) {
         frames,
         // Said in the output rather than left implicit: the whole point of this
         // command is that somebody looks at the pictures.
-        next: frames.length ? "Open every frame above and say what you actually see before deciding this passed." : 'No frames were captured \u2014 add "shot": true to the steps where the answer would be visible.'
+        next: frames.length ? "Open every frame above and say what you actually see before deciding this passed. When it looks right, hand it to a person: `vupp play` is the only thing that answers whether a child would enjoy it." : 'No frames were captured \u2014 add "shot": true to the steps where the answer would be visible.'
       },
       () => {
         const lines = [
@@ -6476,7 +7001,7 @@ async function cmdPlaytest(ctx, dir, opts) {
 async function loadSteps(source) {
   const trimmed = source.trim();
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) return JSON.parse(trimmed);
-  return JSON.parse(await readFile3(resolve5(trimmed), "utf8"));
+  return JSON.parse(await readFile3(resolve6(trimmed), "utf8"));
 }
 function slug(label) {
   return (label ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
@@ -6583,12 +7108,17 @@ async function cmdRun(ctx, dir) {
           ...result.warnings ?? []
         ],
         title: result.title ?? titleOf(files),
-        log: sim.log()
+        log: sim.log(),
+        // Said in the result rather than left to be remembered: "it starts and
+        // draws" is not "it is any good", and the only thing that answers the
+        // second is a person holding the buttons.
+        next: result.ok ? "It runs. Check it with `vupp playtest`, then offer them `vupp play` so they can play it themselves." : void 0
       },
       () => {
         if (!result.ok) return `Failed (${result.where ?? "unknown"}): ${result.error}`;
         const lines = [`Running: ${result.title ?? titleOf(files)} @ ${result.fps ?? 30} fps`];
         for (const w of result.warnings ?? []) lines.push(`  warning: ${w}`);
+        lines.push("", "Play it yourself:  vupp play");
         return lines.join("\n");
       }
     );
@@ -6613,6 +7143,8 @@ var USAGE = `vupp \u2014 build and playtest games for the Vupp handheld
   vupp run [dir]                     put it on the simulator and report what happened
   vupp playtest [dir] --goal <text> --steps <json|file>
                                      press buttons, write PNG frames, report what changed
+  vupp play [dir] [--port N]         PLAY IT YOURSELF in a browser \u2014 real keyboard,
+                                     reloads on every edit. Not headless.
   vupp package [dir] [-o out.zip]    the zip a parent imports into the Vupp app
 
 Options
@@ -6646,7 +7178,9 @@ async function main(argv) {
       out: { type: "string", short: "o" },
       author: { type: "string" },
       note: { type: "string" },
-      refresh: { type: "boolean", default: false }
+      refresh: { type: "boolean", default: false },
+      port: { type: "string" },
+      host: { type: "string" }
     }
   });
   const ctx = { json: Boolean(values.json), quiet: Boolean(values.quiet) };
@@ -6694,6 +7228,13 @@ async function main(argv) {
         outDir: values.frames
       });
     }
+    case "play":
+      return cmdPlay(ctx, rest[0] ?? ".", {
+        port: values.port ? Number(values.port) : void 0,
+        host: values.host,
+        // parseArgs has no --no-x negation; with strict:false it lands here.
+        open: !values["no-open"]
+      });
     case "package":
       return cmdPackage(ctx, rest[0] ?? ".", {
         out: values.out,
