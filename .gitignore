@@ -1,0 +1,2 @@
+node_modules/
+# NOTE: dist/ is committed on purpose — see tools/sdk/sync.mts.

@@ -1,0 +1,26 @@
+{
+  "name": "vupp-cli",
+  "version": "0.1.0",
+  "description": "Build and playtest games for the Vupp kids handheld",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "vupp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicholasareed/vupp-sdk.git"
+  },
+  "dependencies": {
+    "@puppeteer/browsers": "^2.4.0",
+    "fflate": "^0.8.3",
+    "puppeteer-core": "^23.0.0",
+    "zod": "^4.0.0"
+  }
+}
