@@ -123,24 +123,28 @@ vupp run --json</code></pre>
       is not finished when the frames look right; it is finished when the person who asked
       for it has had their hands on the buttons. <strong>Offer this without being asked.</strong>
     </p>
-    <p>If they are at this computer:</p>
-    <pre><code>vupp play</code></pre>
+    <pre><code>vupp play                 # the project directory
+vupp play frog-hop.zip    # or a packaged game</code></pre>
     <p>
-      Serves the game and prints a URL to open. Real keyboard &mdash; arrows move,
-      <code>Z</code> is A, <code>X</code> is B, <code>Enter</code> is START &mdash; plus an
-      on-screen pad for phones, and <strong>it reloads every time you edit a file</strong>.
-      So they can play, say "the frog is too slow", and be playing the fix seconds later
-      without restarting anything. It runs until Ctrl+C, and prints a URL rather than only
-      opening a window, so it works over SSH and in containers.
+      Serves the game and prints a URL to open. The game is <strong>already loaded</strong>
+      &mdash; there is no file picker and nothing to drag, which matters because an AI cannot
+      drop a file onto a page. Real keyboard &mdash; arrows move, <code>Z</code> is A,
+      <code>X</code> is B, <code>Enter</code> is START &mdash; plus an on-screen pad for
+      phones, and <strong>it reloads every time you edit a file</strong>. So they can play,
+      say "the frog is too slow", and be playing the fix seconds later without restarting
+      anything. It runs until Ctrl+C, and prints a URL rather than only opening a window, so
+      it works over SSH and in containers (<code>--port 4173</code> for a predictable one to
+      forward).
     </p>
-    <p>If the game is for somebody else &mdash; a grandparent, a therapist, a parent who is
+    <p>To send it to somebody else &mdash; a grandparent, a therapist, a parent who is
       somewhere else:</p>
     <pre><code>vupp package -o frog-hop.zip --author "Grandma" --note "for Sam"</code></pre>
     <p>
       Send them that file plus <a href="play/">the player page</a>
       (<code>https://nicholasareed.github.io/vupp-sdk/play/</code>). They drop the zip onto it
       and play immediately &mdash; nothing to install, no account, and the zip is unpacked in
-      their own browser rather than uploaded anywhere.
+      their own browser rather than uploaded anywhere. That page is for a <em>person</em>;
+      use <code>vupp play</code> yourself.
     </p>
     <p>
       To put it on a real device, the zip goes into the Vupp phone app and a parent publishes

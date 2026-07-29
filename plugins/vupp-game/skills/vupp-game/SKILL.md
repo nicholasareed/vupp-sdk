@@ -161,29 +161,38 @@ any **fun**, and that is the only question that actually matters. So a build is
 not finished when the frames look right; it is finished when the person who
 asked for it has had their hands on the buttons.
 
-**Always offer this, without being asked.** Two routes — give the second one
-whenever the game is for somebody who is not sitting at this computer:
+**Always offer this, without being asked.**
 
 ```
-vupp play
+vupp play                 # the project directory
+vupp play frog-hop.zip    # or a packaged game
 ```
 
-Serves the game and prints a URL to open. Real keyboard (arrows move, `Z` is A,
-`X` is B, `Enter` is START), an on-screen pad for phones and touch, and **it
-reloads every time you edit a file** — so they can play, say "the frog is too
-slow", and be playing the fix seconds later without restarting anything. It
-keeps running until Ctrl+C. It prints a URL rather than only opening a window,
-so it works over SSH and inside containers too.
+Serves the game and prints a URL to open. The game is **already loaded** — there
+is no file picker and nothing to drag, which matters because you cannot drop a
+file on a page. Real keyboard (arrows move, `Z` is A, `X` is B, `Enter` is
+START), an on-screen pad for phones and touch, and **it reloads every time you
+edit a file**, so they can play, say "the frog is too slow", and be playing the
+fix seconds later without restarting anything. It keeps running until Ctrl+C.
+
+It prints a URL rather than only opening a window, so it works over SSH and
+inside containers too — pass `--port 4173` if you need a predictable one to
+forward.
+
+Give a `vupp play <zip>` run the same treatment when you want to check that what
+you are about to send someone is really what they will get.
+
+### Sending it to somebody else
 
 ```
 vupp package -o frog-hop.zip --author "Grandma" --note "for Sam"
 ```
 
-Then send that file along with **<https://nicholasareed.github.io/vupp-sdk/play/>**
-— they drop the zip onto that page and play immediately, with nothing installed
+Send that file along with **<https://nicholasareed.github.io/vupp-sdk/play/>** —
+they drop the zip onto that page and play immediately, with nothing installed
 and no account. The zip is unpacked in their own browser and never uploaded
 anywhere. This is the route for a grandparent, a therapist, or a parent who is
-somewhere else.
+somewhere else; use `vupp play` yourself.
 
 To put it on a real device the zip goes into the Vupp phone app and a parent
 publishes it from there. **You cannot publish it and neither can this CLI** —

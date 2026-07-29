@@ -6010,6 +6010,78 @@ import { resolve as resolve4 } from "path";
 import { unzipSync, zipSync } from "fflate";
 var STUDIO_META_PATH = "studio.json";
 var ZIP_EPOCH = Date.UTC(1980, 0, 1, 12);
+var SOURCE_PATH_RE = /^(app\.json|main\.lua|lib\/[A-Za-z0-9_-]+\.lua)$/;
+var ZipReadError = class extends Error {
+  constructor(code, human) {
+    super(human);
+    this.code = code;
+    this.human = human;
+    this.name = "ZipReadError";
+  }
+  code;
+  human;
+};
+function stripWrapper(names) {
+  const real = names.filter((n) => !isJunk(n) && !isUnsafe(n) && !n.endsWith("/"));
+  if (real.length === 0) return (n) => n;
+  const first = real[0];
+  const slash = first.indexOf("/");
+  if (slash === -1) return (n) => n;
+  const prefix = first.slice(0, slash + 1);
+  return real.every((n) => n.startsWith(prefix)) ? (n) => n.slice(prefix.length) : (n) => n;
+}
+function isJunk(name) {
+  return name.startsWith("__MACOSX/") || name.split("/").some((part) => part === ".DS_Store" || part === "Thumbs.db");
+}
+function isUnsafe(name) {
+  return name.startsWith("/") || name.split("/").includes("..");
+}
+function readAppZip(bytes) {
+  let entries;
+  try {
+    entries = unzipSync(bytes);
+  } catch {
+    throw new ZipReadError(
+      "not_a_zip",
+      "That file isn't a zip, or it's damaged. Ask for it to be sent again."
+    );
+  }
+  const names = Object.keys(entries);
+  const unwrap = stripWrapper(names);
+  const decoder = new TextDecoder();
+  const files = {};
+  const ignored = [];
+  let meta = null;
+  for (const name of names) {
+    if (isJunk(name) || name.endsWith("/")) continue;
+    if (isUnsafe(name)) {
+      ignored.push(name);
+      continue;
+    }
+    const rel = unwrap(name);
+    const data = entries[name];
+    if (!data) continue;
+    if (rel === STUDIO_META_PATH) {
+      try {
+        meta = JSON.parse(decoder.decode(data));
+      } catch {
+      }
+      continue;
+    }
+    if (!SOURCE_PATH_RE.test(rel)) {
+      ignored.push(rel);
+      continue;
+    }
+    files[rel] = decoder.decode(data);
+  }
+  if (!files["app.json"] || !files["main.lua"]) {
+    throw new ZipReadError(
+      "not_an_app",
+      "That zip doesn't have a Vupp app in it. It should contain the app's settings and program files."
+    );
+  }
+  return { files, meta, ignored };
+}
 function writeAppZip(files, meta) {
   const encoder = new TextEncoder();
   const entries = {};
@@ -6055,13 +6127,14 @@ async function cmdPackage(ctx, dir, opts) {
       // The zip is not the end of the job. Somebody still has to find out
       // whether a child enjoys it, and that cannot be checked from here — so
       // the result says how, in the words to hand over.
-      next: `Tell them the game is ready, and OFFER to let them play it now \u2014 give both routes: run \`vupp play\` for a link they open immediately, or send them ${out} and ${PLAY_URL} where they drop the file in and play with nothing installed. Then ask what they want changed, and iterate.`
+      next: `Tell them the game is ready, and OFFER to let them play it now. The fastest route is \`vupp play ${out}\` \u2014 it opens a browser with the game already running, no file picker involved. To send it to somebody else, give them ${out} plus ${PLAY_URL}, where they drop the file in and play with nothing installed. Then ask what they want changed, and iterate.`
     },
     () => [
       `Wrote ${out} (${Math.round(bytes.length / 102.4) / 10} KB)`,
       "",
-      "Play it now:      vupp play",
-      `Or send the zip:  ${PLAY_URL}  (they drop it in \u2014 nothing to install)`,
+      `Play it now:      vupp play ${out}`,
+      `Send it to them:  ${out} plus ${PLAY_URL}`,
+      "                  (they drop the file in \u2014 nothing to install)",
       "",
       "To put it on a device: open the zip in the Vupp app and publish from there.",
       "Publishing is a parent-only step by design."
@@ -6078,6 +6151,7 @@ function safeName(title) {
 import { spawn } from "child_process";
 import { createHash as createHash2 } from "crypto";
 import { watch as fsWatch } from "fs";
+import { readFile as readFile3 } from "fs/promises";
 import { resolve as resolve5 } from "path";
 
 // src/sim/playShell.ts
@@ -6532,9 +6606,10 @@ async function serveAssets(dir, overlay = {}, { port = 0, host = "127.0.0.1" } =
 }
 
 // src/commands/play.ts
-async function cmdPlay(ctx, dir, opts) {
-  const root = resolve5(dir);
-  let files = await readProject(root);
+async function cmdPlay(ctx, target, opts) {
+  const root = resolve5(target);
+  const fromZip = root.toLowerCase().endsWith(".zip");
+  let files = fromZip ? await readZipProject(root) : await readProject(root);
   const checked = lint(files);
   if (!checked.ok) {
     emit(
@@ -6564,11 +6639,11 @@ async function cmdPlay(ctx, dir, opts) {
     { port: opts.port ?? 0, host: opts.host ?? "0.0.0.0" }
   );
   let debounce = null;
-  const watcher = fsWatch(root, { recursive: true }, () => {
+  const watcher = fsWatch(root, fromZip ? {} : { recursive: true }, () => {
     if (debounce) clearTimeout(debounce);
     debounce = setTimeout(async () => {
       try {
-        const next = await readProject(root);
+        const next = fromZip ? await readZipProject(root) : await readProject(root);
         const nextHash = hash(next);
         if (nextHash === version) return;
         const result = lint(next);
@@ -6589,13 +6664,21 @@ ${lintFailure(result)}
   const url = server.url;
   emit(
     ctx,
-    { ok: true, url, port: server.port, title, watching: root },
+    {
+      ok: true,
+      url,
+      port: server.port,
+      title,
+      source: fromZip ? "zip" : "project",
+      watching: root
+    },
     () => [
       "",
       `  Play it:  ${url}`,
       "",
       `  ${title} \u2014 arrows move, Z is A, X is B, Enter is START.`,
-      "  Edits reload automatically. Press Ctrl+C when you are done.",
+      fromZip ? "  The game is already loaded. Re-package and this tab catches up." : "  Edits reload automatically.",
+      "  Press Ctrl+C when you are done.",
       ""
     ].join("\n")
   );
@@ -6609,6 +6692,21 @@ ${lintFailure(result)}
     process.on("SIGTERM", stop);
   });
   return 0;
+}
+async function readZipProject(path) {
+  let bytes;
+  try {
+    bytes = await readFile3(path);
+  } catch {
+    throw new ProjectError(`${path} does not exist.`);
+  }
+  try {
+    return readAppZip(new Uint8Array(bytes)).files;
+  } catch (err) {
+    throw new ProjectError(
+      err instanceof ZipReadError ? err.human : `${path} could not be read as a Vupp game.`
+    );
+  }
 }
 function hash(files) {
   const h = createHash2("sha256");
@@ -6632,7 +6730,7 @@ function openBrowser(url) {
 }
 
 // src/commands/playtest.ts
-import { mkdir as mkdir3, readFile as readFile3, writeFile as writeFile4 } from "fs/promises";
+import { mkdir as mkdir3, readFile as readFile4, writeFile as writeFile4 } from "fs/promises";
 import { join as join5, resolve as resolve6 } from "path";
 
 // src/sim/driver.ts
@@ -7001,7 +7099,7 @@ async function cmdPlaytest(ctx, dir, opts) {
 async function loadSteps(source) {
   const trimmed = source.trim();
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) return JSON.parse(trimmed);
-  return JSON.parse(await readFile3(resolve6(trimmed), "utf8"));
+  return JSON.parse(await readFile4(resolve6(trimmed), "utf8"));
 }
 function slug(label) {
   return (label ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32);
@@ -7143,8 +7241,8 @@ var USAGE = `vupp \u2014 build and playtest games for the Vupp handheld
   vupp run [dir]                     put it on the simulator and report what happened
   vupp playtest [dir] --goal <text> --steps <json|file>
                                      press buttons, write PNG frames, report what changed
-  vupp play [dir] [--port N]         PLAY IT YOURSELF in a browser \u2014 real keyboard,
-                                     reloads on every edit. Not headless.
+  vupp play [dir|game.zip]           PLAY IT YOURSELF in a browser \u2014 real keyboard,
+                                     already loaded, reloads on every edit. Not headless.
   vupp package [dir] [-o out.zip]    the zip a parent imports into the Vupp app
 
 Options
