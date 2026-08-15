@@ -2,7 +2,7 @@
 
 Build a game for a Vupp handheld by asking your AI for one.
 
-The Vupp is a kids' handheld: a 160x240 screen, a d-pad, A and B, and Lua. This
+The Vupp is a kids' handheld: a 240x160 screen, a d-pad, A and B, and Lua. This
 gives Claude Code the engine reference, eleven games that already ship on the
 hardware, and a real simulator to run and playtest what it writes.
 

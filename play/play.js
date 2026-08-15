@@ -90,13 +90,13 @@ for (const el of document.querySelectorAll('[data-btn]')) {
 }
 
 /* Touch on the screen itself — apps declaring the "touch" capability read this.
- * Coordinates are the 320x480 panel space the firmware expects. */
+ * Coordinates are the 480x320 panel space the firmware expects. */
 const screenCanvas = document.getElementById('canvas')
 function panelXY(e) {
   const r = screenCanvas.getBoundingClientRect()
   return {
-    x: Math.round(((e.clientX - r.left) / r.width) * 320),
-    y: Math.round(((e.clientY - r.top) / r.height) * 480),
+    x: Math.round(((e.clientX - r.left) / r.width) * 480),
+    y: Math.round(((e.clientY - r.top) / r.height) * 320),
   }
 }
 screenCanvas.addEventListener('pointerdown', (e) => {

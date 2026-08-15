@@ -12,14 +12,16 @@
       "fps": 30,
       "capabilities": [],
       "palette": ["#101828", "#1d2b53", "#7e2553", "#008751", "#ffec27"],
-      "min_engine": 9,
+      "min_engine": 16,
+      "hires": true,
       "parent": { "version": 1, "documents": {}, "commands": {}, "events": {} }
     }
 
   Rules: keep "slug" exactly "draft" (the preview device installs it under that
   name). "category" is one of game | creative | music | learning. Add "touch"
   to "capabilities" ONLY if you call vupp.touch() — and if you do, make the
-  touch targets big, at least 40x40 canvas pixels. "palette" is optional; omit
+  touch targets big, at least 80x80 canvas pixels. Keep "hires": true — it is
+  what puts the app on the full-resolution canvas. "palette" is optional; omit
   it for the built-in 16, or list your own and use indices 0..n-1. Bump
   "version" whenever you change the app. Leave "parent" exactly as shown unless
   you emit events.

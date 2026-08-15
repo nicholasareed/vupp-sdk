@@ -1,0 +1,228 @@
+/* Vupp Play shell — configures the Emscripten Module before vupp_sim.js
+ * loads, sizes the screen, and drives the on-screen pad.
+ *
+ * Input path: each on-screen button owns one bit of the device pad bitmask
+ * (VUPP_PAD_* in firmware/vupp/components/board/include/vupp_board.h). The
+ * combined mask is pushed through vupp_board_sim_inject_pad(), the same
+ * entry point --script uses, so touch input is indistinguishable from real
+ * keys. Per-button pointer events keep multi-touch working (dpad + A). */
+
+'use strict';
+
+const CANVAS_W = 480;
+const CANVAS_H = 320;
+
+/* --- Emscripten module config (must exist before vupp_sim.js) -------------- */
+
+var Module = {
+  canvas: document.getElementById('canvas'),
+
+  arguments: (() => {
+    const args = ['--no-input-overlay'];
+    const script = new URLSearchParams(location.search).get('script');
+    if (script) {
+      args.push('--script', script); /* e.g. ?script=wait:3000,press:a */
+    }
+    return args;
+  })(),
+
+  preRun: [
+    function mountSaves() {
+      /* Game saves (docstore) persist across reloads via IndexedDB. The
+       * preload bundle only writes /.sim/sd/apps/** and /.sim/nvs.json, so
+       * mounting IDBFS at /.sim/sd/docs never collides with it. */
+      try {
+        Module.FS.mkdirTree('/.sim/sd/docs');
+        Module.FS.mount(Module.IDBFS, {}, '/.sim/sd/docs');
+        Module.addRunDependency('vupp-idbfs');
+        Module.FS.syncfs(true, (err) => {
+          if (err) console.warn('[play] IDBFS load failed:', err);
+          Module.removeRunDependency('vupp-idbfs');
+        });
+      } catch (e) {
+        console.warn('[play] IDBFS unavailable, saves will not persist:', e);
+      }
+    },
+  ],
+
+  onRuntimeInitialized() {
+    document.getElementById('loading').classList.add('hidden');
+  },
+};
+
+/* Periodically flush saves to IndexedDB; also on tab hide (best-effort
+ * synchronous kick — IndexedDB commits async, so the interval does the real
+ * work during play). */
+function flushSaves() {
+  if (Module.calledRun && Module.FS) {
+    Module.FS.syncfs(false, () => {});
+  }
+}
+setInterval(flushSaves, 5000);
+window.addEventListener('pagehide', flushSaves);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushSaves();
+});
+
+/* --- screen scaling -------------------------------------------------------- */
+
+function fitCanvas() {
+  const area = document.getElementById('screen-area');
+  const canvas = Module.canvas;
+  const availW = area.clientWidth - 16;
+  const availH = area.clientHeight - 16;
+  let scale = Math.min(availW / CANVAS_W, availH / CANVAS_H);
+  if (scale >= 1) {
+    scale = Math.floor(scale); /* integer = crisp pixels */
+  }
+  canvas.style.width = `${Math.round(CANVAS_W * scale)}px`;
+  canvas.style.height = `${Math.round(CANVAS_H * scale)}px`;
+}
+window.addEventListener('resize', fitCanvas);
+window.addEventListener('orientationchange', fitCanvas);
+fitCanvas();
+
+/* --- on-screen pad --------------------------------------------------------- */
+
+let padMask = 0;
+
+function sendPad() {
+  if (Module.calledRun) {
+    Module.ccall('vupp_board_sim_inject_pad', null, ['number'], [padMask]);
+  }
+}
+
+function unlockAudio() {
+  /* Browsers gate audio on a user gesture; SDL usually resumes its context
+   * itself, but do it explicitly for stubborn mobile Safari. */
+  const ctx = Module.SDL2 && Module.SDL2.audioContext;
+  if (ctx && ctx.state === 'suspended') {
+    ctx.resume();
+  }
+}
+
+for (const btn of document.querySelectorAll('button[data-bit]')) {
+  const bit = Number(btn.dataset.bit);
+  let downAt = 0;
+
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    btn.classList.add('held');
+    downAt = performance.now();
+    padMask |= bit;
+    sendPad();
+    unlockAudio();
+  });
+
+  const release = (e) => {
+    e.preventDefault();
+    btn.classList.remove('held');
+    /* the sim polls the pad every ~30ms; keep even the quickest tap
+     * observable for at least 80ms before clearing the bit */
+    const clear = () => {
+      padMask &= ~bit;
+      sendPad();
+    };
+    const elapsed = performance.now() - downAt;
+    if (elapsed < 80) {
+      setTimeout(clear, 80 - elapsed);
+    } else {
+      clear();
+    }
+  };
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+
+/* Never leave a phantom button held when the page loses focus mid-press. */
+function releaseAll() {
+  if (padMask !== 0) {
+    padMask = 0;
+    sendPad();
+    for (const b of document.querySelectorAll('button.held')) {
+      b.classList.remove('held');
+    }
+  }
+}
+window.addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') releaseAll();
+});
+
+/* --- device-screen touch --------------------------------------------------- */
+/* The canvas's pointer events feed the sim's synthetic touch indev directly
+ * (vupp_board_sim_touch_state) — LVGL polls it like real touch hardware, so
+ * taps, drags, and launcher scrolling all behave. Screen coords are the
+ * device's 480x320, derived from the canvas's CSS size. */
+
+function canvasPoint(e) {
+  const r = Module.canvas.getBoundingClientRect();
+  const x = Math.max(0, Math.min(479, Math.round(((e.clientX - r.left) / r.width) * 480)));
+  const y = Math.max(0, Math.min(319, Math.round(((e.clientY - r.top) / r.height) * 320)));
+  return { x, y };
+}
+
+let screenPointerId = null;
+let touchDownAt = 0;
+
+function sendTouch(x, y, down) {
+  if (Module.calledRun) {
+    Module.ccall('vupp_board_sim_touch_state', null, ['number', 'number', 'number'], [x, y, down]);
+  }
+}
+
+/* The sim polls touch every ~33ms; a sub-poll tap would vanish. Hold releases
+ * back until the press has been observable for at least 80ms. */
+function sendTouchUp(x, y) {
+  const elapsed = performance.now() - touchDownAt;
+  if (elapsed < 80) {
+    setTimeout(() => sendTouch(x, y, 0), 80 - elapsed);
+  } else {
+    sendTouch(x, y, 0);
+  }
+}
+
+Module.canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (screenPointerId !== null) return; /* one screen finger at a time */
+  screenPointerId = e.pointerId;
+  Module.canvas.setPointerCapture(e.pointerId);
+  touchDownAt = performance.now();
+  const p = canvasPoint(e);
+  sendTouch(p.x, p.y, 1);
+  unlockAudio();
+});
+Module.canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== screenPointerId) return;
+  e.preventDefault();
+  const p = canvasPoint(e);
+  sendTouch(p.x, p.y, 1);
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  Module.canvas.addEventListener(ev, (e) => {
+    if (e.pointerId !== screenPointerId) return;
+    e.preventDefault();
+    screenPointerId = null;
+    const p = canvasPoint(e);
+    sendTouchUp(p.x, p.y);
+  });
+}
+window.addEventListener('blur', () => {
+  if (screenPointerId !== null) {
+    screenPointerId = null;
+    sendTouch(0, 0, 0);
+  }
+});
+
+/* iOS rubber-band scrolling: kill any touchmove outside the canvas (the
+ * canvas's own pointer handlers manage the screen). */
+document.addEventListener(
+  'touchmove',
+  (e) => {
+    if (e.target !== Module.canvas) e.preventDefault();
+  },
+  { passive: false }
+);

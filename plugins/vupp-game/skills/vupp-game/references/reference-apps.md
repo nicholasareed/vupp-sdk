@@ -9,17 +9,17 @@ shapes and text, no sprite sheets, no sound files. Open one with
 
 | slug | title | category | lines | palette |
 | --- | --- | --- | --- | --- |
-| `abc-trace` | ABC Trace | learning | 595 | built-in 16 |
-| `asteroids` | Space Pop | game | 406 | built-in 16 |
-| `beat-bop` | Beat Bop | music | 416 | built-in 16 |
-| `drift` | Drift | creative | 324 | 16 colours |
-| `fish-count` | Fish Count | learning | 442 | 16 colours |
-| `maze` | Maze | game | 609 | built-in 16 |
+| `abc-trace` | ABC Trace | learning | 604 | built-in 16 |
+| `asteroids` | Space Pop | game | 410 | built-in 16 |
+| `beat-bop` | Beat Bop | music | 423 | built-in 16 |
+| `drift` | Drift | creative | 325 | 16 colours |
+| `fish-count` | Fish Count | learning | 449 | 16 colours |
+| `maze` | Maze | game | 613 | built-in 16 |
 | `music-maker` | Music Maker | music | 468 | built-in 16 |
 | `ripple` | Ripple | creative | 411 | 16 colours |
-| `runner` | Dash | game | 632 | built-in 16 |
-| `spelling` | Spelling | learning | 877 | built-in 16 |
-| `tetris` | Blocks! | game | 493 | built-in 16 |
+| `runner` | Dash | game | 634 | built-in 16 |
+| `spelling` | Spelling | learning | 882 | built-in 16 |
+| `tetris` | Blocks! | game | 496 | built-in 16 |
 
 - **abc-trace** — tracks abc.letter, abc.alphabet; uses the touchscreen
 - **asteroids** — tracks space.pops, space.golden

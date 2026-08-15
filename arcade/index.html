@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Vupp Play — the device simulator compiled to WASM, wrapped in a
+     phone-friendly shell: the landscape 480x320 device screen up top, a dpad +
+     A/B/Start/Select deck at the bottom. See apps-internal/play/README.md. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#101014">
+  <title>Vupp Play</title>
+  <link rel="stylesheet" href="play.css">
+</head>
+<body>
+  <div id="loading">
+    <div class="loading-title">vupp</div>
+    <div class="loading-sub">warming up…</div>
+  </div>
+
+  <div id="shell">
+    <div id="screen-area">
+      <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    </div>
+
+    <div id="deck">
+      <div id="dpad">
+        <button class="pad-btn" id="btn-up"    data-bit="1"><span>&#9650;</span></button>
+        <button class="pad-btn" id="btn-left"  data-bit="4"><span>&#9664;</span></button>
+        <button class="pad-btn" id="btn-mid" disabled></button>
+        <button class="pad-btn" id="btn-right" data-bit="8"><span>&#9654;</span></button>
+        <button class="pad-btn" id="btn-down"  data-bit="2"><span>&#9660;</span></button>
+      </div>
+      <div id="meta-btns">
+        <button class="pill-btn" data-bit="128">select</button>
+        <button class="pill-btn" data-bit="64">start</button>
+      </div>
+      <div id="ab-btns">
+        <button class="round-btn" id="btn-a" data-bit="16">A</button>
+        <button class="round-btn" id="btn-b" data-bit="32">B</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="play.js"></script>
+  <script src="vupp_sim.js"></script>
+</body>
+</html>

@@ -1,0 +1,184 @@
+/* Vupp Play shell — mobile-first, held portrait, with the landscape device
+ * screen up top and the controls below. The sim renders into #canvas at a
+ * fixed 480x320 backing store; we only stretch it with CSS (integer scale
+ * when room allows, fractional shrink on narrow screens) so SDL's pointer
+ * coordinate mapping stays correct. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  background: #101014;
+  color: #e8e8ee;
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+}
+
+#shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* The screen is wider than tall now, so it no longer fights the deck for
+ * height: give it the full width at the panel's 480:320 aspect and let the
+ * deck take everything underneath. play.js letterboxes the canvas inside. */
+#screen-area {
+  flex: 0 0 auto;
+  align-self: center;
+  width: min(94vw, 660px);
+  aspect-ratio: 480 / 320;
+  max-height: 55dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+
+#canvas {
+  image-rendering: pixelated;
+  background: #000;
+  border-radius: 10px;
+  outline: none;
+}
+
+/* --- control deck ---------------------------------------------------------- */
+
+#deck {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 14px;
+}
+
+button {
+  border: none;
+  color: #e8e8ee;
+  background: #26262e;
+  font: inherit;
+  touch-action: none;
+  cursor: pointer;
+}
+
+button:active,
+button.held {
+  background: #4a4a58;
+  transform: scale(0.94);
+}
+
+/* dpad: 3x3 grid cross */
+#dpad {
+  display: grid;
+  grid-template-columns: 62px 62px 62px;
+  grid-template-rows: 62px 62px 62px;
+  grid-template-areas:
+    ".    up    ."
+    "left mid   right"
+    ".    down  .";
+}
+
+#btn-up    { grid-area: up;    border-radius: 12px 12px 0 0; }
+#btn-down  { grid-area: down;  border-radius: 0 0 12px 12px; }
+#btn-left  { grid-area: left;  border-radius: 12px 0 0 12px; }
+#btn-right { grid-area: right; border-radius: 0 12px 12px 0; }
+#btn-mid   { grid-area: mid;   background: #26262e; cursor: default; }
+
+.pad-btn span {
+  font-size: 18px;
+  opacity: 0.75;
+}
+
+/* start/select pills */
+#meta-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pill-btn {
+  min-width: 64px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+/* A / B */
+#ab-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.round-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+#btn-a { background: #2e4b8f; }
+#btn-b { background: #8f2e4b; }
+#btn-a:active, #btn-a.held { background: #4468bd; }
+#btn-b:active, #btn-b.held { background: #bd4468; }
+
+/* compact phones: the landscape screen is short, so only genuinely squat
+ * viewports need the deck shrunk to keep everything on screen */
+@media (max-height: 600px) {
+  #dpad {
+    grid-template-columns: 48px 48px 48px;
+    grid-template-rows: 48px 48px 48px;
+  }
+  .round-btn { width: 56px; height: 56px; }
+  #deck { padding: 6px 12px 10px; }
+}
+
+/* --- loading splash -------------------------------------------------------- */
+
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #101014;
+  transition: opacity 0.3s;
+}
+
+#loading.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-title {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.loading-sub {
+  font-size: 14px;
+  opacity: 0.6;
+}

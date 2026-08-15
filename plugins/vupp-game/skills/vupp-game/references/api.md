@@ -4,8 +4,11 @@
 # The Vupp engine
 
 An app is Lua 5.4 files plus a manifest. The device runs ONE app at a time in a
-fresh VM. The canvas is 160x240 (portrait), integer-scaled 2x to the panel — so
-every coordinate you write is in 0..159 x 0..239.
+fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel — every
+coordinate you write is in 0..479 x 0..319, and every canvas pixel is a real
+panel pixel. (Declared by "hires": true in app.json — always include it; without
+it the app gets the legacy 240x160 pixel-doubled canvas and every coordinate
+below would be wrong by 2x.)
 
 ## Lifecycle — define these as globals on the pre-existing `vupp` table
 
@@ -35,9 +38,9 @@ every coordinate you write is in 0..159 x 0..239.
 
   gfx.text is the one to get right. Each size has its OWN glyph set (4x6, 8x12,
   12x18), advance is 4*size px per character and line height 6*size px. Centre
-  a string with x = (160 - #str * 4 * size) / 2. "\n" starts a new line.
-  Anything a CHILD reads wants size 2 at minimum, size 3 for early readers —
-  size 1 is for debug text only.
+  a string with x = (480 - #str * 4 * size) / 2. "\n" starts a new line.
+  On this canvas anything a CHILD reads wants size 3 (size 2 for secondary
+  labels); size 1 is a tiny 4x6 glyph, for debug text only.
 
   ASCII 32..127 ONLY. The font has no other glyphs and draws a literal "?" for
   every byte outside that range, so a star, an arrow, an accent or an emoji
@@ -46,9 +49,10 @@ every coordinate you write is in 0..159 x 0..239.
   heart. Draw those with gfx.circle / gfx.tri / gfx.rect instead.
 
   There are more calls (gfx.sprite, gfx.image, gfx.texcol, gfx.terrain,
-  gfx.floor, gfx.ssprite, ...) but they all need asset files, which this studio
-  cannot produce yet. Draw with the shape and text calls above. That is not a
-  handicap: many of the best apps in the Vupp library are shapes only.
+  gfx.floor, gfx.ssprite, gfx.mesh, ...) but they all need asset files, which
+  this studio cannot produce yet. Draw with the shape and text calls above.
+  That is not a handicap: many of the best apps in the Vupp library are shapes
+  only.
 
 ## Colors
 

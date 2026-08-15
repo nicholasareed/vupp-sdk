@@ -35,7 +35,7 @@ var DEVICE_STATUSES = ["unclaimed", "active", "locked", "retired"];
 var PAIRING_CODE_LENGTH = 6;
 var DEVICE_JWT_TTL_S = 24 * 60 * 60;
 var DEVICE_JWT_REFRESH_WINDOW_S = 6 * 60 * 60;
-var APP_ENGINE_VERSION = 9;
+var APP_ENGINE_VERSION = 16;
 var APP_PALETTE_MAX = 255;
 var AUDIO_MUTE_MAX_S = 4 * 60 * 60;
 var OTA_CHECK_INTERVAL_S = 6 * 60 * 60;
@@ -60,7 +60,11 @@ var registerResponseSchema = z.object({
 var claimRequestSchema = z.object({
   code: pairingCodeSchema,
   kid_id: z.guid(),
-  name: z.string().min(1).max(60)
+  name: z.string().min(1).max(60),
+  // The claiming phone's IANA timezone — it seeds the kid's first policy so
+  // quiet hours run on family time from day one. Optional for old app builds;
+  // the server validates against its own IANA table and falls back if bogus.
+  timezone: z.string().min(1).max(64).optional()
 });
 var tokenChallengeResponseSchema = z.object({
   nonce: z.string(),
@@ -72,14 +76,25 @@ var tokenRequestSchema = z.object({
   // the signature with this pubkey — no server-side pubkey storage needed.
   pubkey: z.string(),
   nonce: z.string(),
-  signature: z.string()
+  signature: z.string(),
   // base64 ECDSA P-256 signature over `${fingerprint}.${nonce}`
+  // sha256 of a staged local-channel secret the device has stored. Its presence
+  // is what promotes that secret to active (docs/04 §1) — the device proving it
+  // holds the new value is the only thing that makes the swap safe.
+  lc_ack: z.string().length(64).optional()
 });
 var tokenResponseSchema = z.object({
   token: z.string(),
   expires_at: z.iso.datetime(),
   device_id: z.guid(),
-  family_id: z.guid()
+  family_id: z.guid(),
+  // Local-channel secret (docs/04 §1) — omitted (never null) when the row
+  // predates the column and the backfill hasn't run.
+  local_channel_secret: z.string().optional(),
+  // A rotation waiting to be taken up: the device stores this, then acks with
+  // `lc_ack` on its next token call to promote it. Phones keep using the
+  // active secret until that ack lands.
+  local_channel_secret_pending: z.string().optional()
 });
 var docPutSchema = z.object({
   op: z.literal("doc.put"),
@@ -350,7 +365,20 @@ var GFX_MEMBERS = /* @__PURE__ */ new Set([
   "theight",
   "ssprite",
   "tri",
-  "floor"
+  "floor",
+  // engine v11: the whole-model pipeline. These were missing here, so the
+  // linter told every 3D app that gfx.mesh "does not exist and calling it
+  // crashes" — including the two that ship and run on it.
+  "mload",
+  "munload",
+  "zclear",
+  "mcam",
+  "mpose",
+  "mesh",
+  // engine v14: the live canvas size, plain numbers on the gfx table
+  // (480x320 for "hires": true manifests, 240x160 legacy).
+  "w",
+  "h"
 ]);
 var GFX_ASSETLESS = /* @__PURE__ */ new Set(["clear", "rect", "line", "circle", "text", "tri"]);
 var VUPP_MEMBERS = /* @__PURE__ */ new Set([
@@ -368,7 +396,9 @@ var VUPP_MEMBERS = /* @__PURE__ */ new Set([
   "docs",
   "store",
   "touch",
-  "canvas"
+  "canvas",
+  "date",
+  "ambience"
 ]);
 var VUPP_LIFECYCLE = /* @__PURE__ */ new Set(["init", "update", "draw", "on_exit"]);
 var VUPP_CAPABILITY_GATED = { touch: "touch", canvas: "canvas" };
@@ -637,7 +667,7 @@ function lintLua(file, src, opts = {}) {
   }
   for (const [name, instead] of Object.entries(BANNED_CALLS)) {
     if (defined.has(name)) continue;
-    const re = new RegExp(`\\b${name}\\s*[("'{]`, "g");
+    const re = new RegExp(`(?<![.:\\w])${name}\\s*[("'{]`, "g");
     m = re.exec(code);
     while (m) {
       add(m.index, "sandbox", `${name} is not available in the Vupp sandbox \u2014 use ${instead}`);
@@ -791,6 +821,15 @@ function lintManifest(src, opts) {
     add(
       "manifest-min-engine",
       `"min_engine" is ${minEngine} but this engine is v${engineVersion}, so the app is refused before it starts. Use ${engineVersion}.`
+    );
+  }
+  const hires = manifest2.hires;
+  if (hires !== void 0 && typeof hires !== "boolean") {
+    add("manifest-hires", '"hires" must be true or false (native 480x320 canvas opt-in).');
+  } else if (hires === true && typeof minEngine === "number" && minEngine < 14) {
+    add(
+      "manifest-hires",
+      '"hires": true needs "min_engine": 14 \u2014 an older engine would run the app on the 240x160 canvas and every layout coordinate would be wrong.'
     );
   }
   return problems;
@@ -1350,7 +1389,7 @@ var CHROME_ARGS = [
   "--disable-renderer-backgrounding",
   "--disable-backgrounding-occluded-windows",
   "--mute-audio",
-  "--window-size=320,480"
+  "--window-size=480,320"
 ];
 
 // src/commands/doctor.ts
@@ -1414,7 +1453,7 @@ import { resolve as resolve3 } from "path";
 
 // ../app-reference/src/studio-reference.json
 var studio_reference_default = {
-  engine: 9,
+  engine: 16,
   apps: [
     {
       slug: "abc-trace",
@@ -1422,12 +1461,12 @@ var studio_reference_default = {
       category: "learning",
       summary: "tracks abc.letter, abc.alphabet; uses the touchscreen",
       palette: 0,
-      lines: 595,
+      lines: 604,
       files: {
         "app.json": `{
   "slug": "abc-trace",
   "title": "ABC Trace",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "learning",
   "fps": 30,
@@ -1435,7 +1474,8 @@ var studio_reference_default = {
     "touch",
     "canvas"
   ],
-  "min_engine": 8,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -1524,14 +1564,16 @@ var studio_reference_default = {
 --
 -- Content: the full A-Z alphabet as handcrafted stroke polylines below
 -- (straight-segment approximations of curves, chunky-size friendly).
--- Extras: a 5x6 letter-picker grid (grid button bottom-right, or B) and a
+-- Extras: a 7x4 letter-picker grid (grid button bottom-right, or B) and a
 -- one-time whole-alphabet party (confetti + fanfare + dancing letters).
--- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).
+-- Canvas 480x320 native (landscape, engine v14 hires), default PICO-8 palette
+-- (docs/07-app-library.md).
 
 -- Stroke order follows standard handwriting teaching: vertical stems first,
 -- then bowls/bars; curves counterclockwise from the top like C/O.
--- All coordinates stay inside x 45..115, y 55..185 (the tracing area, well
--- inside the snapshot rect x 20..140 / y 35..200).
+-- Letters are authored in a portrait-era box (x 45..115, y 55..185 around
+-- center 80,120); loadLetter maps them to the landscape canvas around
+-- LCX,LCY at LSC scale, landing inside the snapshot rect x 128..352 / y 12..312.
 local LETTERS = {
   { ch = "A", strokes = {
     { { 45, 185 }, { 80, 55 } },
@@ -1644,7 +1686,7 @@ local LETTERS = {
   } },
 }
 
-local HIT_R = 15          -- generous: finger within 15px covers a dot
+local HIT_R = 30          -- generous: finger within 30px covers a dot
 local DONE_FRAC = 0.8     -- wobbly traces pass
 
 local CONF_COLORS = { 8, 9, 10, 11, 12, 14 }
@@ -1667,8 +1709,11 @@ local alphaT = 0          -- alphabet party countdown
 local confetti = {}       -- {x, y, vx, vy, c}
 local touchDown = false   -- for press-edge detection on buttons/tiles
 
--- picker button (bottom-right, outside the snapshot rect y 35..200)
-local BTN_X, BTN_Y = 120, 206
+-- picker button (bottom-right corner, outside the snapshot rect x 128..352)
+local BTN_X, BTN_Y = 400, 240
+
+-- landscape refit: map the authored portrait letter box onto the wide canvas
+local LCX, LCY, LSC = 240, 172, 1.9
 
 local function scheduleTone(delay, freq, ms)
   toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }
@@ -1716,11 +1761,13 @@ local function loadLetter(idx)
   for s = 1, #L.strokes do
     local st = L.strokes[s]
     for seg = 1, #st - 1 do
-      local x1, y1 = st[seg][1], st[seg][2]
-      local x2, y2 = st[seg + 1][1], st[seg + 1][2]
+      local x1 = LCX + (st[seg][1] - 80) * LSC
+      local y1 = LCY + (st[seg][2] - 120) * LSC
+      local x2 = LCX + (st[seg + 1][1] - 80) * LSC
+      local y2 = LCY + (st[seg + 1][2] - 120) * LSC
       local dx, dy = x2 - x1, y2 - y1
       local len = math.sqrt(dx * dx + dy * dy)
-      local n = math.max(1, math.floor(len / 9))
+      local n = math.max(1, math.floor(len / 18))
       for k = 0, n do
         points[#points + 1] = {
           x = math.floor(x1 + dx * k / n),
@@ -1782,11 +1829,11 @@ local function choosePick(i)
   vupp.tone(660, 80)
 end
 
--- picker tile geometry: 5 columns x 6 rows (Z alone on the last row)
+-- picker tile geometry: 7 columns x 4 rows (V..Z share the last row)
 local function tileRect(i)
-  local c = (i - 1) % 5
-  local r = math.floor((i - 1) / 5)
-  return 6 + c * 30, 26 + r * 34, 28, 30
+  local c = (i - 1) % 7
+  local r = math.floor((i - 1) / 7)
+  return 10 + c * 66, 52 + r * 66, 60, 60
 end
 
 function vupp.init()
@@ -1824,10 +1871,10 @@ local function updateAlphabet(dt)
   if alphaT > 1.2 and #confetti < 90 then
     for _ = 1, 3 do
       confetti[#confetti + 1] = {
-        x = vupp.rand(160) - 1,
-        y = -4 - vupp.rand(20),
-        vx = vupp.rand(40) - 20,
-        vy = 30 + vupp.rand(50),
+        x = vupp.rand(480) - 1,
+        y = -8 - vupp.rand(40),
+        vx = vupp.rand(80) - 40,
+        vy = 60 + vupp.rand(100),
         c = CONF_COLORS[vupp.rand(#CONF_COLORS)],
       }
     end
@@ -1837,8 +1884,8 @@ local function updateAlphabet(dt)
     local f = confetti[i]
     f.x = f.x + f.vx * dt
     f.y = f.y + f.vy * dt
-    f.vy = f.vy + 30 * dt
-    if f.y > 244 then
+    f.vy = f.vy + 60 * dt
+    if f.y > 328 then
       table.remove(confetti, i)
     else
       i = i + 1
@@ -1865,10 +1912,10 @@ local function updatePick()
     moved = true
   end
   if vupp.btnp("up") then
-    pickSel = math.max(1, pickSel - 5)
+    pickSel = math.max(1, pickSel - 7)
     moved = true
   elseif vupp.btnp("down") then
-    pickSel = math.min(#LETTERS, pickSel + 5)
+    pickSel = math.min(#LETTERS, pickSel + 7)
     moved = true
   end
   if moved then
@@ -1882,7 +1929,7 @@ local function updatePick()
   local pressed = touch and not touchDown
   touchDown = touch ~= nil
   if pressed then
-    if touch.x >= 132 and touch.y <= 22 then  -- close box
+    if touch.x >= 424 and touch.y <= 44 then  -- close box
       screen = "trace"
       return
     end
@@ -1919,7 +1966,7 @@ function vupp.update(dt)
       local seq = vupp.store.get("seq", 1)
       local key = string.format("trace_%s_%04d", string.lower(LETTERS[cur].ch), seq)
       if vupp.canvas.save(key, { letter = LETTERS[cur].ch },
-          { x = 20, y = 35, w = 120, h = 165 }) then
+          { x = 128, y = 12, w = 224, h = 300 }) then
         vupp.store.set("seq", seq + 1)
       end
     end
@@ -1980,8 +2027,8 @@ function vupp.update(dt)
     for _ = 1, 2 do
       sparks[#sparks + 1] = {
         x = touch.x, y = touch.y,
-        vx = (vupp.rand(60) - 30) * 1.0,
-        vy = (vupp.rand(60) - 30) * 1.0,
+        vx = (vupp.rand(120) - 60) * 1.0,
+        vy = (vupp.rand(120) - 60) * 1.0,
         life = 0.4,
         c = ({ 7, 10, 14 })[vupp.rand(3)],
       }
@@ -1997,45 +2044,45 @@ end
 local function drawAlphabetParty(gfx)
   gfx.clear(1)
   for i = 1, #LETTERS do
-    local c = (i - 1) % 5
-    local r = math.floor((i - 1) / 5)
-    local x = 18 + c * 28
-    if i == #LETTERS then
-      x = 74  -- center lonely Z on its row
+    local c = (i - 1) % 7
+    local r = math.floor((i - 1) / 7)
+    local x = 60 + c * 56
+    if r == 3 then
+      x = x + 56  -- center the short V..Z row
     end
-    local y = 40 + r * 30 + math.floor(math.sin(t * 6 + i * 0.7) * 4)
+    local y = 40 + r * 64 + math.floor(math.sin(t * 6 + i * 0.7) * 8)
     gfx.text(LETTERS[i].ch, x, y, CONF_COLORS[((i + math.floor(t * 8)) % 6) + 1], 3)
   end
   for i = 1, #confetti do
     local f = confetti[i]
-    gfx.rect(math.floor(f.x), math.floor(f.y), 3, 2, f.c, true)
+    gfx.rect(math.floor(f.x), math.floor(f.y), 6, 4, f.c, true)
   end
-  gfx.text("you did it!", 36, 220, 7, 2)
+  gfx.text("you did it!", 174, 280, 7, 3)
 end
 
 local function drawPicker(gfx)
   gfx.clear(1)
-  gfx.text("pick a letter", 8, 6, 7, 2)
-  gfx.rect(136, 4, 18, 16, 8, true)   -- close box (B also closes)
-  gfx.text("x", 141, 6, 7, 2)
+  gfx.text("pick a letter", 16, 12, 7, 3)
+  gfx.rect(432, 8, 36, 32, 8, true)   -- close box (B also closes)
+  gfx.text("x", 444, 16, 7, 3)
   for i = 1, #LETTERS do
     local x, y, w, h = tileRect(i)
     if doneMask[i] then
       gfx.rect(x, y, w, h, 10, true)
       gfx.rect(x, y, w, h, 9, false)
-      gfx.circle(x + w - 5, y + 5, 2, 9, true)  -- done badge
+      gfx.circle(x + w - 10, y + 10, 4, 9, true)  -- done badge
     else
       gfx.rect(x, y, w, h, 6, true)
       gfx.rect(x, y, w, h, 5, false)
     end
-    gfx.text(LETTERS[i].ch, x + 8, y + 6, 0, 3)
+    gfx.text(LETTERS[i].ch, x + 24, y + 22, 0, 3)
     if i == cur then
-      gfx.rect(x + 2, y + h - 5, w - 4, 2, 12, true)  -- current letter marker
+      gfx.rect(x + 4, y + h - 10, w - 8, 4, 12, true)  -- current letter marker
     end
     if i == pickSel then
-      local pulse = math.floor(math.sin(t * 6) * 1.5)
-      gfx.rect(x - 2 + pulse, y - 2 + pulse,
-               w + 4 - pulse * 2, h + 4 - pulse * 2, 7, false)
+      local pulse = math.floor(math.sin(t * 6) * 3)
+      gfx.rect(x - 4 + pulse, y - 4 + pulse,
+               w + 8 - pulse * 2, h + 8 - pulse * 2, 7, false)
     end
   end
 end
@@ -2051,12 +2098,13 @@ function vupp.draw(gfx)
 
   gfx.clear(1)
 
-  -- A-Z progress strip: one tick per letter (gold once traced, ring = current)
+  -- A-Z progress strip: one tick per letter (gold once traced, ring = current),
+  -- running down the left edge, clear of the snapshot rect
   for i = 1, #LETTERS do
-    local x = 3 + (i - 1) * 6
-    gfx.rect(x, 8, 4, 6, doneMask[i] and 10 or 5, true)
+    local y = 4 + (i - 1) * 12
+    gfx.rect(8, y, 12, 8, doneMask[i] and 10 or 5, true)
     if i == cur then
-      gfx.rect(x - 1, 6, 6, 10, 7, false)
+      gfx.rect(4, y - 4, 20, 16, 7, false)
     end
   end
 
@@ -2065,13 +2113,13 @@ function vupp.draw(gfx)
   for k = 1, #points do
     local p = points[k]
     if flash then
-      gfx.circle(p.x, p.y, 5, CONF_COLORS[(k % 6) + 1], true)
+      gfx.circle(p.x, p.y, 10, CONF_COLORS[(k % 6) + 1], true)
     elseif p.hit then
-      gfx.circle(p.x, p.y, 5, 10, true)
-      gfx.circle(p.x, p.y, 5, 9, false)
+      gfx.circle(p.x, p.y, 10, 10, true)
+      gfx.circle(p.x, p.y, 10, 9, false)
     else
-      gfx.circle(p.x, p.y, 4, 13, false)
-      gfx.circle(p.x, p.y, 1, 6, true)
+      gfx.circle(p.x, p.y, 8, 13, false)
+      gfx.circle(p.x, p.y, 2, 6, true)
     end
   end
 
@@ -2079,8 +2127,8 @@ function vupp.draw(gfx)
   if celebT == 0 then
     for k = 1, #points do
       if not points[k].hit then
-        local r = 3 + math.floor(math.abs(math.sin(t * 4)) * 3)
-        gfx.circle(points[k].x, points[k].y, r + 5, 7, false)
+        local r = 6 + math.floor(math.abs(math.sin(t * 4)) * 6)
+        gfx.circle(points[k].x, points[k].y, r + 10, 7, false)
         break
       end
     end
@@ -2088,24 +2136,25 @@ function vupp.draw(gfx)
 
   for i = 1, #sparks do
     local s = sparks[i]
-    gfx.rect(math.floor(s.x), math.floor(s.y), 2, 2, s.c, true)
+    gfx.rect(math.floor(s.x), math.floor(s.y), 4, 4, s.c, true)
   end
 
-  -- letter-picker button: a little grid of tiles (bottom-right, or press B)
-  gfx.rect(BTN_X, BTN_Y, 34, 28, 12, true)
-  gfx.rect(BTN_X, BTN_Y, 34, 28, 7, false)
+  -- letter-picker button: a little grid of tiles (bottom-right, or press B);
+  -- the whole corner from BTN_X,BTN_Y (80x80) is the touch target
+  gfx.rect(BTN_X + 4, BTN_Y + 12, 68, 56, 12, true)
+  gfx.rect(BTN_X + 4, BTN_Y + 12, 68, 56, 7, false)
   for r = 0, 1 do
     for c = 0, 1 do
-      gfx.rect(BTN_X + 6 + c * 12, BTN_Y + 5 + r * 10, 9, 8, 7, true)
+      gfx.rect(BTN_X + 16 + c * 24, BTN_Y + 22 + r * 20, 18, 16, 7, true)
     end
   end
 
   if celebT > 0 then
     for i = 1, 5 do
-      local x = 20 + (i - 1) * 24
-      local y = 215 + math.floor(math.sin(t * 6 + i) * 5)
-      gfx.circle(x, y, 5, 10, true)
-      gfx.circle(x, y, 2, 7, true)
+      local x = 60 + (i - 1) * 70
+      local y = 300 + math.floor(math.sin(t * 6 + i) * 8)
+      gfx.circle(x, y, 10, 10, true)
+      gfx.circle(x, y, 4, 7, true)
     end
   end
 end
@@ -2118,17 +2167,18 @@ end
       category: "game",
       summary: "tracks space.pops, space.golden",
       palette: 0,
-      lines: 406,
+      lines: 410,
       files: {
         "app.json": `{
   "slug": "asteroids",
   "title": "Space Pop",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "game",
   "fps": 30,
   "capabilities": [],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -2180,7 +2230,7 @@ end
   }
 }
 `,
-        "main.lua": '-- luacheck: globals vupp\n-- Space Pop: a friendly rocket slides along the bottom (left/right) and\n-- shoots bubbles (A) at big soft space rocks drifting down. Rocks pop into\n-- smaller rocks, the smallest pop into sparkles. Rocks that reach the bottom\n-- just drift past \u2014 nothing can hurt you.\n-- v1.1: waves with a clear-chime and gentle escalation, rocks with faces,\n-- a rare golden rock worth bonus pops, chord pop sounds, milestone\n-- celebrations every 20 pops, a NEW BEST! banner, and a title splash.\n-- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).\n\nlocal SHIP_Y = 214\nlocal ship = { x = 80 }\nlocal bubbles = {}        -- {x, y}\nlocal rocks = {}          -- {x, y, size 3|2|1, wob, spd, drift, face, gold}\nlocal sparks = {}         -- {x, y, vx, vy, life, c}\nlocal starsBg = {}        -- fixed background stars\nlocal state = "title"     -- "title" | "play"\nlocal wave = 1\nlocal quota = 3           -- big rocks in the current wave\nlocal spawned = 0\nlocal interT = 0          -- between-wave breather\nlocal spawnT = 0.5\nlocal goldenUp = false    -- one golden rock at a time\nlocal pops = 0\nlocal bestPops = 0\nlocal bestWave = 1\nlocal prevBest = 0        -- best at session start (for the NEW BEST moment)\nlocal bestShown = false\nlocal bannerT = 0\nlocal bannerStr = ""\nlocal bannerC = 7\nlocal bannerSize = 1\nlocal shootCd = 0\nlocal t = 0\nlocal toneq = {}\n\nlocal ROCK_R = { 6, 10, 16 }       -- by size index\nlocal ROCK_SPD = { 30, 24, 16 }\nlocal POP_FREQ = { 700, 480, 320 }\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function setBanner(str, c, size, secs)\n  bannerStr = str\n  bannerC = c\n  bannerSize = size\n  bannerT = secs\nend\n\nlocal function sparkBurst(x, y, n, cols)\n  for _ = 1, n do\n    sparks[#sparks + 1] = {\n      x = x, y = y,\n      vx = (vupp.rand(100) - 50) * 1.2,\n      vy = (vupp.rand(100) - 50) * 1.2,\n      life = 0.5,\n      c = cols[vupp.rand(#cols)],\n    }\n  end\nend\n\nlocal function spdMul()\n  return 1 + math.min(wave - 1, 8) * 0.06\nend\n\nlocal function spawnRock()\n  local gold = false\n  if wave >= 2 and not goldenUp and vupp.rand(8) == 1 then\n    gold = true\n    goldenUp = true\n  end\n  rocks[#rocks + 1] = {\n    x = 20 + vupp.rand(120),\n    y = -20,\n    size = gold and 2 or 3,\n    wob = vupp.rand(628) / 100,\n    spd = (gold and (ROCK_SPD[2] + 10) * 1.35 or (ROCK_SPD[3] + vupp.rand(6))) * spdMul(),\n    drift = 0,\n    face = vupp.rand(3),\n    gold = gold,\n  }\nend\n\nlocal function popRock(idx)\n  local r = rocks[idx]\n  table.remove(rocks, idx)\n  if r.gold then\n    goldenUp = false\n    pops = pops + 5                          -- bonus pops!\n    sparkBurst(r.x, r.y, 14, { 10, 9, 7 })\n    setBanner("+5", 10, 2, 1.2)\n    scheduleTone(0.00, 784, 90)\n    scheduleTone(0.10, 988, 90)\n    scheduleTone(0.20, 1175, 90)\n    scheduleTone(0.32, 1568, 220)\n    vupp.emit("space.golden", { pops = pops })\n  else\n    pops = pops + 1\n    -- chord blip: root + a third, deeper for bigger rocks\n    local f = POP_FREQ[r.size] + math.min(pops * 2, 200)\n    vupp.tone(f, 70, 0.7)\n    vupp.tone(math.floor(f * 1.26), 70, 0.4)\n  end\n  if pops > bestPops then\n    bestPops = pops\n    vupp.store.set("best_pops", bestPops)  -- hard-exit safe\n    if not bestShown and prevBest >= 10 then\n      bestShown = true                      -- the record just fell!\n      setBanner("new best!", 8, 2, 2.2)\n      sparkBurst(80, 80, 12, { 10, 7 })\n      scheduleTone(0.45, 784, 90)\n      scheduleTone(0.55, 988, 90)\n      scheduleTone(0.68, 1319, 240)\n    end\n  end\n  if pops % 20 == 0 then\n    vupp.emit("space.pops", { pops = pops })\n    if bannerT <= 0 then\n      setBanner(tostring(pops) .. " pops!", 10, 2, 1.6)\n    end\n    sparkBurst(r.x, r.y, 12, { 7, 10, 14 })\n    scheduleTone(0.10, 659, 80)\n    scheduleTone(0.18, 784, 80)\n    scheduleTone(0.26, 988, 140)\n  end\n  if r.gold then\n    return\n  end\n  if r.size > 1 then\n    for dir = -1, 1, 2 do\n      rocks[#rocks + 1] = {\n        x = r.x + dir * 6,\n        y = r.y,\n        size = r.size - 1,\n        wob = vupp.rand(628) / 100,\n        spd = (ROCK_SPD[r.size - 1] + vupp.rand(8)) * spdMul(),\n        drift = dir * 14,\n        face = vupp.rand(3),\n        gold = false,\n      }\n    end\n  else\n    sparkBurst(r.x, r.y, 8, { 7, 10, 14 })\n  end\nend\n\nfunction vupp.init()\n  bestPops = vupp.store.get("best_pops", 0)\n  bestWave = vupp.store.get("best_wave", 1)\n  prevBest = bestPops\n  for i = 1, 24 do\n    starsBg[i] = { x = vupp.rand(158), y = vupp.rand(200), c = (i % 3 == 0) and 6 or 5 }\n  end\nend\n\nlocal function updatePlay(dt)\n  if vupp.btn("left") then\n    ship.x = math.max(12, ship.x - 95 * dt)\n  elseif vupp.btn("right") then\n    ship.x = math.min(148, ship.x + 95 * dt)\n  end\n\n  shootCd = math.max(0, shootCd - dt)\n  if vupp.btnp("a") and shootCd == 0 and #bubbles < 4 then\n    bubbles[#bubbles + 1] = { x = math.floor(ship.x), y = SHIP_Y - 16 }\n    shootCd = 0.15\n    vupp.tone(880, 40, 0.5)\n  end\n\n  -- wave flow: spawn the quota, breathe when the sky is clear, escalate\n  if interT > 0 then\n    interT = interT - dt\n    if interT <= 0 then\n      wave = wave + 1\n      if wave > bestWave then\n        bestWave = wave\n        vupp.store.set("best_wave", bestWave)\n      end\n      quota = math.min(2 + wave, 8)\n      spawned = 0\n      spawnT = 0.8\n    end\n  elseif spawned < quota then\n    spawnT = spawnT - dt\n    if spawnT <= 0 then\n      spawnRock()\n      spawned = spawned + 1\n      spawnT = math.max(1.2, 2.3 - wave * 0.12)\n    end\n  elseif #rocks == 0 then\n    interT = 1.8                     -- wave clear! chime + banner, then more\n    setBanner("wave " .. tostring(wave) .. " clear!", 11, 1, 1.8)\n    scheduleTone(0.00, 523, 90)\n    scheduleTone(0.10, 659, 90)\n    scheduleTone(0.20, 784, 160)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y - 150 * dt\n    local hit = false\n    for j = 1, #rocks do\n      local r = rocks[j]\n      local dx = b.x - r.x\n      local dy = b.y - r.y\n      local rr = ROCK_R[r.size] + 3\n      if dx * dx + dy * dy < rr * rr then\n        popRock(j)\n        hit = true\n        break\n      end\n    end\n    if hit or b.y < -4 then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  i = 1\n  while i <= #rocks do\n    local r = rocks[i]\n    r.y = r.y + r.spd * dt\n    r.x = r.x + r.drift * dt + math.sin(t * 2 + r.wob) * 10 * dt\n    r.drift = r.drift * (1 - dt)  -- split kick fades\n    if r.y > 260 then\n      if r.gold then\n        goldenUp = false           -- the golden one got away \u2014 another will come\n      end\n      table.remove(rocks, i)       -- drifts past harmlessly\n    else\n      i = i + 1\n    end\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n  bannerT = math.max(0, bannerT - dt)\n\n  if state == "title" then\n    if vupp.btnp("a") or vupp.btnp("left") or vupp.btnp("right") then\n      state = "play"\n      vupp.tone(660, 60, 0.5)\n    end\n  else\n    updatePlay(dt)\n  end\n\n  local i = 1\n  while i <= #sparks do\n    local s = sparks[i]\n    s.life = s.life - dt\n    if s.life <= 0 then\n      table.remove(sparks, i)\n    else\n      s.x = s.x + s.vx * dt\n      s.y = s.y + s.vy * dt\n      i = i + 1\n    end\n  end\nend\n\nlocal function drawRock(gfx, r)\n  local rad = ROCK_R[r.size]\n  local x = math.floor(r.x)\n  local y = math.floor(r.y)\n  local body = r.gold and 10 or 6\n  local edge = r.gold and 9 or 5\n  gfx.circle(x, y, rad, body, true)\n  gfx.circle(x, y, rad, edge, false)\n  if r.gold then\n    -- twinkling golden rock\n    local tw = math.floor(t * 6) % 2\n    gfx.rect(x - 6 + tw, y - 7, 2, 2, 7, true)\n    gfx.rect(x + 5, y + 3 + tw, 2, 2, 7, true)\n    gfx.circle(x - 3, y - 3, 2, 9, true)\n  else\n    gfx.circle(x - math.floor(rad / 3), y - math.floor(rad / 4),\n               math.max(1, math.floor(rad / 4)), 5, true)\n    gfx.circle(x + math.floor(rad / 3), y + math.floor(rad / 3),\n               math.max(1, math.floor(rad / 5)), 5, true)\n  end\n  if r.size == 3 then\n    gfx.circle(x + 4, y - 5, 2, 13, true)\n  end\n  -- rock personality (big enough rocks only)\n  if r.size >= 2 or r.gold then\n    local e = math.max(2, math.floor(rad / 4))\n    if r.face == 1 then           -- happy: dot eyes + smile\n      gfx.circle(x - e, y - 1, 1, 1, true)\n      gfx.circle(x + e, y - 1, 1, 1, true)\n      gfx.line(x - 2, y + e, x + 2, y + e, 1)\n      gfx.rect(x - 3, y + e - 1, 1, 1, 1, true)\n      gfx.rect(x + 3, y + e - 1, 1, 1, 1, true)\n    elseif r.face == 2 then       -- sleepy: closed eyes\n      gfx.line(x - e - 1, y - 1, x - e + 1, y - 1, 1)\n      gfx.line(x + e - 1, y - 1, x + e + 1, y - 1, 1)\n      gfx.rect(x - 1, y + e, 2, 1, 1, true)\n    else                          -- surprised: round eyes + o mouth\n      gfx.circle(x - e, y - 1, 1, 1, false)\n      gfx.circle(x + e, y - 1, 1, 1, false)\n      gfx.circle(x, y + e, 1, 1, true)\n    end\n  end\nend\n\nlocal function drawShip(gfx)\n  local x = math.floor(ship.x)\n  local flame = math.floor(math.abs(math.sin(t * 12)) * 4)\n  gfx.rect(x - 2, SHIP_Y + 10, 4, 3 + flame, 9, true)   -- flame\n  gfx.rect(x - 1, SHIP_Y + 10, 2, 2 + flame, 10, true)\n  gfx.rect(x - 6, SHIP_Y - 8, 12, 18, 7, true)          -- body\n  gfx.circle(x, SHIP_Y - 8, 6, 8, true)                 -- nose cone\n  gfx.circle(x, SHIP_Y - 2, 4, 12, true)                -- window\n  gfx.circle(x - 1, SHIP_Y - 3, 1, 7, true)\n  gfx.rect(x - 9, SHIP_Y + 4, 3, 6, 8, true)            -- fins\n  gfx.rect(x + 6, SHIP_Y + 4, 3, 6, 8, true)\nend\n\nlocal function drawTitle(gfx)\n  gfx.text("space pop", 45, 41, 1, 2)\n  gfx.text("space pop", 44, 40, 7, 2)\n\n  -- a big happy rock floating under the title\n  local demo = { x = 80, y = 90 + math.sin(t * 2) * 4, size = 3,\n                 wob = 0, spd = 0, drift = 0, face = 1, gold = false }\n  drawRock(gfx, demo)\n\n  -- controls: arrows move, A pops\n  gfx.tri(48, 138, 48, 150, 38, 144, 7)                 -- left arrow\n  gfx.tri(112, 138, 112, 150, 122, 144, 7)              -- right arrow\n  gfx.text("move", 72, 140, 6)\n  local pr = 8 + math.floor(math.abs(math.sin(t * 3)) * 2)\n  gfx.circle(56, 172, pr, 7, true)\n  gfx.circle(56, 172, pr, 6, false)\n  gfx.text("a", 53, 166, 0, 2)\n  gfx.text("pop", 74, 168, 6)\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(0)\n  for i = 1, #starsBg do\n    local s = starsBg[i]\n    gfx.rect(s.x, s.y, 1, 1, s.c, true)\n  end\n\n  if state == "title" then\n    drawTitle(gfx)\n    drawShip(gfx)\n    return\n  end\n\n  -- pops (left), wave pips (center), best-with-star (right)\n  gfx.text(tostring(pops), 8, 8, 7, 2)\n  local wl = "wave " .. tostring(wave)\n  gfx.text(wl, 80 - #wl * 2, 26, 6)\n  gfx.circle(118, 13, 4, 10, true)\n  gfx.circle(118, 13, 2, 9, true)\n  gfx.text(tostring(bestPops), 126, 8, 10, 2)\n\n  for i = 1, #rocks do\n    drawRock(gfx, rocks[i])\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), 3, 12, false)\n    gfx.circle(math.floor(b.x) - 1, math.floor(b.y) - 1, 1, 7, true)\n  end\n\n  for i = 1, #sparks do\n    local s = sparks[i]\n    gfx.rect(math.floor(s.x), math.floor(s.y), 2, 2, s.c, true)\n  end\n\n  drawShip(gfx)\n\n  -- celebration banner (wave clear / milestones / new best / golden bonus)\n  if bannerT > 0 then\n    local w = #bannerStr * 4 * bannerSize + 16\n    local x = 80 - math.floor(w / 2)\n    local h = 8 + 6 * bannerSize\n    gfx.rect(x, 60, w, h, 7, true)\n    gfx.rect(x, 60, w, h, bannerC, false)\n    gfx.text(bannerStr, x + 8, 63, bannerC, bannerSize)\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Space Pop: a friendly rocket slides along the bottom (left/right) and\n-- shoots bubbles (A) at big soft space rocks drifting down. Rocks pop into\n-- smaller rocks, the smallest pop into sparkles. Rocks that reach the bottom\n-- just drift past \u2014 nothing can hurt you.\n-- v1.1: waves with a clear-chime and gentle escalation, rocks with faces,\n-- a rare golden rock worth bonus pops, chord pop sounds, milestone\n-- celebrations every 20 pops, a NEW BEST! banner, and a title splash.\n-- Native 480x320 canvas (engine v14, "hires"), default PICO-8 palette\n-- (docs/07-app-library.md). The sky is wide and short: fall speeds are\n-- scaled to the vertical span, the ship slides faster to cover the wider\n-- bottom edge.\n\nlocal SHIP_Y = 268\nlocal ship = { x = 240 }\nlocal bubbles = {}        -- {x, y}\nlocal rocks = {}          -- {x, y, size 3|2|1, wob, spd, drift, face, gold}\nlocal sparks = {}         -- {x, y, vx, vy, life, c}\nlocal starsBg = {}        -- fixed background stars\nlocal state = "title"     -- "title" | "play"\nlocal wave = 1\nlocal quota = 3           -- big rocks in the current wave\nlocal spawned = 0\nlocal interT = 0          -- between-wave breather\nlocal spawnT = 0.5\nlocal goldenUp = false    -- one golden rock at a time\nlocal pops = 0\nlocal bestPops = 0\nlocal bestWave = 1\nlocal prevBest = 0        -- best at session start (for the NEW BEST moment)\nlocal bestShown = false\nlocal bannerT = 0\nlocal bannerStr = ""\nlocal bannerC = 7\nlocal bannerSize = 2\nlocal shootCd = 0\nlocal t = 0\nlocal toneq = {}\n\nlocal ROCK_R = { 12, 20, 32 }      -- by size index\nlocal ROCK_SPD = { 40, 32, 22 }    -- px/s, scaled to the 320px-tall sky\nlocal POP_FREQ = { 700, 480, 320 }\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function setBanner(str, c, size, secs)\n  bannerStr = str\n  bannerC = c\n  bannerSize = size\n  bannerT = secs\nend\n\nlocal function sparkBurst(x, y, n, cols)\n  for _ = 1, n do\n    sparks[#sparks + 1] = {\n      x = x, y = y,\n      vx = (vupp.rand(100) - 50) * 2.4,\n      vy = (vupp.rand(100) - 50) * 2.4,\n      life = 0.5,\n      c = cols[vupp.rand(#cols)],\n    }\n  end\nend\n\nlocal function spdMul()\n  return 1 + math.min(wave - 1, 8) * 0.06\nend\n\nlocal function spawnRock()\n  local gold = false\n  if wave >= 2 and not goldenUp and vupp.rand(8) == 1 then\n    gold = true\n    goldenUp = true\n  end\n  rocks[#rocks + 1] = {\n    x = 40 + vupp.rand(400),\n    y = -40,\n    size = gold and 2 or 3,\n    wob = vupp.rand(628) / 100,\n    spd = (gold and (ROCK_SPD[2] + 20) * 1.35 or (ROCK_SPD[3] + vupp.rand(6) * 2)) * spdMul(),\n    drift = 0,\n    face = vupp.rand(3),\n    gold = gold,\n  }\nend\n\nlocal function popRock(idx)\n  local r = rocks[idx]\n  table.remove(rocks, idx)\n  if r.gold then\n    goldenUp = false\n    pops = pops + 5                          -- bonus pops!\n    sparkBurst(r.x, r.y, 14, { 10, 9, 7 })\n    setBanner("+5", 10, 3, 1.2)\n    scheduleTone(0.00, 784, 90)\n    scheduleTone(0.10, 988, 90)\n    scheduleTone(0.20, 1175, 90)\n    scheduleTone(0.32, 1568, 220)\n    vupp.emit("space.golden", { pops = pops })\n  else\n    pops = pops + 1\n    -- chord blip: root + a third, deeper for bigger rocks\n    local f = POP_FREQ[r.size] + math.min(pops * 2, 200)\n    vupp.tone(f, 70, 0.7)\n    vupp.tone(math.floor(f * 1.26), 70, 0.4)\n  end\n  if pops > bestPops then\n    bestPops = pops\n    vupp.store.set("best_pops", bestPops)  -- hard-exit safe\n    if not bestShown and prevBest >= 10 then\n      bestShown = true                      -- the record just fell!\n      setBanner("new best!", 8, 3, 2.2)\n      sparkBurst(240, 160, 12, { 10, 7 })\n      scheduleTone(0.45, 784, 90)\n      scheduleTone(0.55, 988, 90)\n      scheduleTone(0.68, 1319, 240)\n    end\n  end\n  if pops % 20 == 0 then\n    vupp.emit("space.pops", { pops = pops })\n    if bannerT <= 0 then\n      setBanner(tostring(pops) .. " pops!", 10, 3, 1.6)\n    end\n    sparkBurst(r.x, r.y, 12, { 7, 10, 14 })\n    scheduleTone(0.10, 659, 80)\n    scheduleTone(0.18, 784, 80)\n    scheduleTone(0.26, 988, 140)\n  end\n  if r.gold then\n    return\n  end\n  if r.size > 1 then\n    for dir = -1, 1, 2 do\n      rocks[#rocks + 1] = {\n        x = r.x + dir * 12,\n        y = r.y,\n        size = r.size - 1,\n        wob = vupp.rand(628) / 100,\n        spd = (ROCK_SPD[r.size - 1] + vupp.rand(8) * 2) * spdMul(),\n        drift = dir * 28,\n        face = vupp.rand(3),\n        gold = false,\n      }\n    end\n  else\n    sparkBurst(r.x, r.y, 8, { 7, 10, 14 })\n  end\nend\n\nfunction vupp.init()\n  bestPops = vupp.store.get("best_pops", 0)\n  bestWave = vupp.store.get("best_wave", 1)\n  prevBest = bestPops\n  for i = 1, 24 do\n    starsBg[i] = { x = vupp.rand(476), y = vupp.rand(300), c = (i % 3 == 0) and 6 or 5 }\n  end\nend\n\nlocal function updatePlay(dt)\n  if vupp.btn("left") then\n    ship.x = math.max(24, ship.x - 280 * dt)\n  elseif vupp.btn("right") then\n    ship.x = math.min(456, ship.x + 280 * dt)\n  end\n\n  shootCd = math.max(0, shootCd - dt)\n  if vupp.btnp("a") and shootCd == 0 and #bubbles < 4 then\n    bubbles[#bubbles + 1] = { x = math.floor(ship.x), y = SHIP_Y - 32 }\n    shootCd = 0.15\n    vupp.tone(880, 40, 0.5)\n  end\n\n  -- wave flow: spawn the quota, breathe when the sky is clear, escalate\n  if interT > 0 then\n    interT = interT - dt\n    if interT <= 0 then\n      wave = wave + 1\n      if wave > bestWave then\n        bestWave = wave\n        vupp.store.set("best_wave", bestWave)\n      end\n      quota = math.min(2 + wave, 8)\n      spawned = 0\n      spawnT = 0.8\n    end\n  elseif spawned < quota then\n    spawnT = spawnT - dt\n    if spawnT <= 0 then\n      spawnRock()\n      spawned = spawned + 1\n      spawnT = math.max(1.2, 2.3 - wave * 0.12)\n    end\n  elseif #rocks == 0 then\n    interT = 1.8                     -- wave clear! chime + banner, then more\n    setBanner("wave " .. tostring(wave) .. " clear!", 11, 2, 1.8)\n    scheduleTone(0.00, 523, 90)\n    scheduleTone(0.10, 659, 90)\n    scheduleTone(0.20, 784, 160)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y - 220 * dt\n    local hit = false\n    for j = 1, #rocks do\n      local r = rocks[j]\n      local dx = b.x - r.x\n      local dy = b.y - r.y\n      local rr = ROCK_R[r.size] + 6\n      if dx * dx + dy * dy < rr * rr then\n        popRock(j)\n        hit = true\n        break\n      end\n    end\n    if hit or b.y < -8 then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  i = 1\n  while i <= #rocks do\n    local r = rocks[i]\n    r.y = r.y + r.spd * dt\n    r.x = r.x + r.drift * dt + math.sin(t * 2 + r.wob) * 20 * dt\n    r.drift = r.drift * (1 - dt)  -- split kick fades\n    if r.y > 360 then\n      if r.gold then\n        goldenUp = false           -- the golden one got away \u2014 another will come\n      end\n      table.remove(rocks, i)       -- drifts past harmlessly\n    else\n      i = i + 1\n    end\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n  bannerT = math.max(0, bannerT - dt)\n\n  if state == "title" then\n    if vupp.btnp("a") or vupp.btnp("left") or vupp.btnp("right") then\n      state = "play"\n      vupp.tone(660, 60, 0.5)\n    end\n  else\n    updatePlay(dt)\n  end\n\n  local i = 1\n  while i <= #sparks do\n    local s = sparks[i]\n    s.life = s.life - dt\n    if s.life <= 0 then\n      table.remove(sparks, i)\n    else\n      s.x = s.x + s.vx * dt\n      s.y = s.y + s.vy * dt\n      i = i + 1\n    end\n  end\nend\n\nlocal function drawRock(gfx, r)\n  local rad = ROCK_R[r.size]\n  local x = math.floor(r.x)\n  local y = math.floor(r.y)\n  local body = r.gold and 10 or 6\n  local edge = r.gold and 9 or 5\n  gfx.circle(x, y, rad, body, true)\n  gfx.circle(x, y, rad, edge, false)\n  if r.gold then\n    -- twinkling golden rock\n    local tw = (math.floor(t * 6) % 2) * 2\n    gfx.rect(x - 12 + tw, y - 14, 4, 4, 7, true)\n    gfx.rect(x + 10, y + 6 + tw, 4, 4, 7, true)\n    gfx.circle(x - 6, y - 6, 4, 9, true)\n  else\n    gfx.circle(x - math.floor(rad / 3), y - math.floor(rad / 4),\n               math.max(2, math.floor(rad / 4)), 5, true)\n    gfx.circle(x + math.floor(rad / 3), y + math.floor(rad / 3),\n               math.max(2, math.floor(rad / 5)), 5, true)\n  end\n  if r.size == 3 then\n    gfx.circle(x + 8, y - 10, 4, 13, true)\n  end\n  -- rock personality (big enough rocks only)\n  if r.size >= 2 or r.gold then\n    local e = math.max(4, math.floor(rad / 4))\n    if r.face == 1 then           -- happy: dot eyes + smile\n      gfx.circle(x - e, y - 2, 2, 1, true)\n      gfx.circle(x + e, y - 2, 2, 1, true)\n      gfx.line(x - 4, y + e, x + 4, y + e, 1)\n      gfx.rect(x - 6, y + e - 2, 2, 2, 1, true)\n      gfx.rect(x + 6, y + e - 2, 2, 2, 1, true)\n    elseif r.face == 2 then       -- sleepy: closed eyes\n      gfx.line(x - e - 2, y - 2, x - e + 2, y - 2, 1)\n      gfx.line(x + e - 2, y - 2, x + e + 2, y - 2, 1)\n      gfx.rect(x - 2, y + e, 4, 2, 1, true)\n    else                          -- surprised: round eyes + o mouth\n      gfx.circle(x - e, y - 2, 2, 1, false)\n      gfx.circle(x + e, y - 2, 2, 1, false)\n      gfx.circle(x, y + e, 2, 1, true)\n    end\n  end\nend\n\nlocal function drawShip(gfx)\n  local x = math.floor(ship.x)\n  local flame = math.floor(math.abs(math.sin(t * 12)) * 8)\n  gfx.rect(x - 4, SHIP_Y + 20, 8, 6 + flame, 9, true)   -- flame\n  gfx.rect(x - 2, SHIP_Y + 20, 4, 4 + flame, 10, true)\n  gfx.rect(x - 12, SHIP_Y - 16, 24, 36, 7, true)        -- body\n  gfx.circle(x, SHIP_Y - 16, 12, 8, true)               -- nose cone\n  gfx.circle(x, SHIP_Y - 4, 8, 12, true)                -- window\n  gfx.circle(x - 2, SHIP_Y - 6, 2, 7, true)\n  gfx.rect(x - 18, SHIP_Y + 8, 6, 12, 8, true)          -- fins\n  gfx.rect(x + 12, SHIP_Y + 8, 6, 12, 8, true)\nend\n\nlocal function drawTitle(gfx)\n  gfx.text("space pop", 188, 38, 1, 3)\n  gfx.text("space pop", 186, 36, 7, 3)\n\n  -- a big happy rock floating under the title\n  local demo = { x = 240, y = 124 + math.sin(t * 2) * 8, size = 3,\n                 wob = 0, spd = 0, drift = 0, face = 1, gold = false }\n  drawRock(gfx, demo)\n\n  -- controls on one wide row: arrows move, A pops\n  gfx.tri(116, 180, 116, 204, 96, 192, 7)               -- left arrow\n  gfx.tri(188, 180, 188, 204, 208, 192, 7)              -- right arrow\n  gfx.text("move", 136, 186, 6, 2)\n  local pr = 16 + math.floor(math.abs(math.sin(t * 3)) * 4)\n  gfx.circle(312, 192, pr, 7, true)\n  gfx.circle(312, 192, pr, 6, false)\n  gfx.text("a", 306, 183, 0, 3)\n  gfx.text("pop", 348, 186, 6, 2)\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(0)\n  for i = 1, #starsBg do\n    local s = starsBg[i]\n    gfx.rect(s.x, s.y, 2, 2, s.c, true)\n  end\n\n  if state == "title" then\n    drawTitle(gfx)\n    drawShip(gfx)\n    return\n  end\n\n  -- pops (left), wave label (center), best-with-star (right), one wide row\n  gfx.text(tostring(pops), 16, 16, 7, 3)\n  local wl = "wave " .. tostring(wave)\n  gfx.text(wl, 240 - #wl * 4, 24, 6, 2)\n  gfx.circle(396, 26, 8, 10, true)\n  gfx.circle(396, 26, 4, 9, true)\n  gfx.text(tostring(bestPops), 412, 16, 10, 3)\n\n  for i = 1, #rocks do\n    drawRock(gfx, rocks[i])\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), 6, 12, false)\n    gfx.circle(math.floor(b.x) - 2, math.floor(b.y) - 2, 2, 7, true)\n  end\n\n  for i = 1, #sparks do\n    local s = sparks[i]\n    gfx.rect(math.floor(s.x), math.floor(s.y), 4, 4, s.c, true)\n  end\n\n  drawShip(gfx)\n\n  -- celebration banner (wave clear / milestones / new best / golden bonus)\n  if bannerT > 0 then\n    local w = #bannerStr * 4 * bannerSize + 32\n    local x = 240 - math.floor(w / 2)\n    local h = 16 + 6 * bannerSize\n    gfx.rect(x, 120, w, h, 7, true)\n    gfx.rect(x, 120, w, h, bannerC, false)\n    gfx.text(bannerStr, x + 16, 120 + math.floor((h - 6 * bannerSize) / 2) + 1,\n             bannerC, bannerSize)\n  end\nend\n'
       }
     },
     {
@@ -2189,19 +2239,20 @@ end
       category: "music",
       summary: "tracks beat.streak, beat.tier; uses the touchscreen",
       palette: 0,
-      lines: 416,
+      lines: 423,
       files: {
         "app.json": `{
   "slug": "beat-bop",
   "title": "Beat Bop",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "music",
   "fps": 30,
   "capabilities": [
     "touch"
   ],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -2253,7 +2304,7 @@ end
   }
 }
 `,
-        "main.lua": '-- luacheck: globals vupp\n-- Beat Bop: Simon for little ears. Big pads, each with its own note.\n-- The DJ blob sings a short pattern (pads flash); the kid taps it back.\n-- Success grows the pattern by one (up to 8, then a big party). Each party\n-- unlocks the next TIER \u2014 faster songs, fresh voices, and from tier 3 a\n-- fourth pad (the pads become a 2x2 grid, still toddler-sized). Tier shows\n-- as star badges up top. A miss just giggles and REPLAYS the same pattern \u2014\n-- never punitive. B (or the corner note button) toggles free-play JAM mode:\n-- no pattern, every pad always live, the blob dances along.\n-- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).\n\nlocal PAD_FREQ = { 262, 330, 392, 523 }   -- C E G C\nlocal PAD_COLORS = { 8, 10, 12, 11 }\nlocal PAD_Y = 128\nlocal MAX_LEN = 8\nlocal MAX_TIER = 4\n\n-- tier voices per docs/05 tone waves: tri, then sine (faster), then square\n-- (fourth pad joins), then a mix \u2014 higher tiers sound fresh\nlocal TIERS = {\n  { pads = 3, step = 0.55, toneMs = 260, waves = { "tri", "tri", "tri" } },\n  { pads = 3, step = 0.44, toneMs = 210, waves = { "sine", "sine", "sine" } },\n  { pads = 4, step = 0.44, toneMs = 210, waves = { "square", "square", "square", "square" } },\n  { pads = 4, step = 0.36, toneMs = 180, waves = { "tri", "sine", "square", "tri" } },\n}\n\nlocal pattern = {}\nlocal state = "show"       -- "show" | "input" | "miss" | "good" | "party" | "jam"\nlocal stateT = 0\nlocal showIdx = 0\nlocal inputIdx = 0\nlocal flash = { 0, 0, 0, 0 }\nlocal best = 0\nlocal tier = 1             -- highest tier reached; runs always play at it\nlocal newStarT = 0         -- freshly-earned star flashes during the party\nlocal idleT = 0            -- replay help if the kid stalls\nlocal blobBop = 0\nlocal wobble = 0\nlocal jamNotes = {}        -- floating notes while jamming: {x, y, c, life}\nlocal t = 0\nlocal touchWasDown = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms, vol, wave)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms, vol = vol, wave = wave }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    local q = toneq[i]\n    if q.at <= now then\n      vupp.tone(q.freq, q.ms, q.vol or 0.8, q.wave or "tri")\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function padRect(i)\n  if TIERS[tier].pads == 3 then\n    return 2 + (i - 1) * 53, PAD_Y, 50, 104\n  end\n  local col = (i - 1) % 2\n  local row = i > 2 and 1 or 0\n  return 2 + col * 79, PAD_Y + row * 53, 77, 51\nend\n\nlocal function playPad(i)\n  local tt = TIERS[tier]\n  local w = tt.waves[i] or "tri"\n  vupp.tone(PAD_FREQ[i], tt.toneMs, w == "square" and 0.55 or 0.8, w)\n  flash[i] = 0.35\n  blobBop = 0.3\nend\n\nlocal function newPattern(len)\n  pattern = {}\n  for i = 1, len do\n    pattern[i] = vupp.rand(TIERS[tier].pads)\n  end\n  state = "show"\n  stateT = -0.6   -- little breath before the pattern starts\n  showIdx = 0\n  inputIdx = 0\nend\n\nlocal function patternComplete()\n  local len = #pattern\n  if len > best then\n    best = len\n    vupp.store.set("best_streak", best)  -- hard-exit safe\n    vupp.emit("beat.streak", { length = len })\n  end\n  if len >= MAX_LEN then\n    state = "party"\n    stateT = 2.8\n    -- fanfare: square-lead arpeggio, sine octave shimmer, closing chord\n    scheduleTone(0.00, 523, 110, 0.7, "square")\n    scheduleTone(0.00, 1046, 110, 0.35, "sine")\n    scheduleTone(0.13, 659, 110, 0.7, "square")\n    scheduleTone(0.13, 1318, 110, 0.35, "sine")\n    scheduleTone(0.26, 784, 110, 0.7, "square")\n    scheduleTone(0.39, 1047, 110, 0.7, "square")\n    scheduleTone(0.52, 1319, 240, 0.8, "tri")\n    scheduleTone(0.52, 784, 240, 0.5, "sine")\n    scheduleTone(0.52, 523, 240, 0.4, "sine")\n    if tier < MAX_TIER then\n      -- first full song at this tier: the next challenge unlocks\n      tier = tier + 1\n      vupp.store.set("tier", tier)  -- hard-exit safe\n      vupp.emit("beat.tier", { tier = tier })\n      newStarT = 2.8\n    end\n  else\n    state = "good"\n    stateT = 0.9\n    scheduleTone(0.05, 660, 90)\n    scheduleTone(0.18, 880, 140)\n  end\nend\n\nlocal function padPressed(i)\n  if i > TIERS[tier].pads then\n    return\n  end\n  if state == "jam" then\n    -- free play: every pad always live, a note floats off the pad\n    playPad(i)\n    local x, y, w = padRect(i)\n    jamNotes[#jamNotes + 1] = { x = x + vupp.rand(w) - 1, y = y - 4, c = PAD_COLORS[i], life = 1 }\n    return\n  end\n  if state ~= "input" then\n    return\n  end\n  playPad(i)\n  idleT = 0\n  if i == pattern[inputIdx + 1] then\n    inputIdx = inputIdx + 1\n    if inputIdx >= #pattern then\n      patternComplete()\n    end\n  else\n    -- a giggle, then the SAME pattern replays\n    state = "miss"\n    stateT = 1.0\n    wobble = 0.6\n    scheduleTone(0.30, 300, 70)\n    scheduleTone(0.40, 220, 70)\n    scheduleTone(0.50, 260, 110)\n  end\nend\n\nlocal function toggleJam()\n  if state == "jam" then\n    vupp.tone(523, 80, 0.6)\n    newPattern(1)\n  else\n    state = "jam"\n    jamNotes = {}\n    vupp.tone(784, 80, 0.6, "sine")\n  end\nend\n\nfunction vupp.init()\n  best = vupp.store.get("best_streak", 0)\n  tier = math.floor(vupp.store.get("tier", 1))\n  if tier < 1 then\n    tier = 1\n  elseif tier > MAX_TIER then\n    tier = MAX_TIER\n  end\n  newPattern(1)\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, 4 do\n    flash[i] = math.max(0, flash[i] - dt)\n  end\n  blobBop = math.max(0, blobBop - dt)\n  wobble = math.max(0, wobble - dt)\n  newStarT = math.max(0, newStarT - dt)\n\n  local i = 1\n  while i <= #jamNotes do\n    local n = jamNotes[i]\n    n.y = n.y - 30 * dt\n    n.life = n.life - dt\n    if n.life <= 0 then\n      table.remove(jamNotes, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if state == "show" then\n    stateT = stateT + dt\n    local step = math.floor(stateT / TIERS[tier].step) + 1\n    if step > showIdx and step <= #pattern then\n      showIdx = step\n      playPad(pattern[step])\n    elseif step > #pattern then\n      state = "input"\n      inputIdx = 0\n      idleT = 0\n    end\n  elseif state == "input" then\n    idleT = idleT + dt\n    if idleT > 6 then\n      -- gentle help: sing it again\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "miss" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "good" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(#pattern + 1)\n    end\n  elseif state == "party" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(1)   -- fresh run at the (maybe just-unlocked) tier\n    end\n  end\n\n  -- B toggles jam mode (engine v7: B belongs to gameplay)\n  if vupp.btnp("b") then\n    toggleJam()\n  end\n\n  -- d-pad chords onto the pads too\n  if TIERS[tier].pads == 3 then\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("down") then\n      padPressed(2)\n    elseif vupp.btnp("right") then\n      padPressed(3)\n    end\n  else\n    -- 2x2 grid: left/up = top row, down/right = bottom row\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("up") then\n      padPressed(2)\n    elseif vupp.btnp("down") then\n      padPressed(3)\n    elseif vupp.btnp("right") then\n      padPressed(4)\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown then\n      if touch.x < 34 and touch.y < 28 then\n        toggleJam()\n      elseif touch.y >= PAD_Y - 6 then\n        local pi\n        if TIERS[tier].pads == 3 then\n          pi = math.min(3, math.floor(touch.x / 53) + 1)\n        else\n          local col = touch.x < 81 and 0 or 1\n          local row = touch.y < PAD_Y + 53 and 0 or 1\n          pi = row * 2 + col + 1\n        end\n        padPressed(pi)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawBlob(gfx)\n  local cx, cy = 80, 62\n  local bop = math.floor(blobBop * 20)\n  local ox = 0\n  if wobble > 0 then\n    ox = math.floor(math.sin(wobble * 30) * 4)\n  end\n  if state == "jam" then\n    -- the DJ dances along in free play\n    bop = bop + math.floor(math.abs(math.sin(t * 5)) * 6)\n    ox = ox + math.floor(math.sin(t * 2.5) * 6)\n  end\n  cx = cx + ox\n  cy = cy - bop\n  gfx.circle(cx, cy, 24, 11, true)\n  gfx.circle(cx, cy, 24, 3, false)\n  -- headphones\n  gfx.circle(cx - 22, cy - 2, 6, 5, true)\n  gfx.circle(cx + 22, cy - 2, 6, 5, true)\n  gfx.circle(cx, cy - 12, 25, 5, false)\n  -- face\n  gfx.circle(cx - 8, cy - 5, 3, 0, true)\n  gfx.circle(cx + 8, cy - 5, 3, 0, true)\n  if state == "show" or blobBop > 0 then\n    gfx.circle(cx, cy + 8, 5, 0, true)    -- singing mouth\n    gfx.circle(cx, cy + 9, 2, 8, true)\n  elseif state == "miss" then\n    gfx.line(cx - 5, cy + 9, cx + 5, cy + 7, 0)\n  else\n    gfx.line(cx - 6, cy + 6, cx - 2, cy + 10, 0)\n    gfx.line(cx - 2, cy + 10, cx + 2, cy + 10, 0)\n    gfx.line(cx + 2, cy + 10, cx + 6, cy + 6, 0)\n  end\n  -- music notes while singing\n  if state == "show" then\n    local nx = cx + 30 + math.floor(math.sin(t * 3) * 3)\n    local ny = cy - 18 - math.floor((stateT % TIERS[tier].step) * 12)\n    gfx.circle(nx, ny, 2, 7, true)\n    gfx.line(nx + 2, ny, nx + 2, ny - 6, 7)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- jam toggle button (top-left): note = free play, tiny pads = back to game\n  local jam = state == "jam"\n  gfx.rect(4, 4, 26, 18, jam and 9 or 5, true)\n  gfx.rect(4, 4, 26, 18, 7, false)\n  if jam then\n    gfx.rect(8, 9, 5, 8, 8, true)\n    gfx.rect(15, 9, 5, 8, 10, true)\n    gfx.rect(22, 9, 5, 8, 12, true)\n  else\n    gfx.circle(13, 16, 2, 7, true)\n    gfx.line(15, 16, 15, 8, 7)\n    gfx.line(15, 8, 19, 10, 7)\n  end\n\n  -- tier star badges (one per unlocked tier); a fresh one flashes\n  for i = 1, tier do\n    local x = 60 + (i - 1) * 11\n    local r = 3\n    if newStarT > 0 and i == tier and math.floor(t * 8) % 2 == 0 then\n      r = 5\n    end\n    gfx.circle(x, 13, r, 10, true)\n    gfx.circle(x, 13, 1, 9, true)\n  end\n\n  -- best streak, gold-star convention (star right = best)\n  gfx.circle(118, 13, 4, 10, true)\n  gfx.circle(118, 13, 2, 9, true)\n  gfx.text(tostring(best), 126, 8, 10, 2)\n\n  drawBlob(gfx)\n\n  -- progress dots: one per note, filled as the kid plays it back\n  if not jam then\n    local n = #pattern\n    local x0 = 80 - n * 7 + 4\n    for i = 1, n do\n      local x = x0 + (i - 1) * 14\n      if i <= inputIdx then\n        gfx.circle(x, 112, 5, 10, true)\n        gfx.circle(x, 112, 5, 9, false)\n      else\n        gfx.circle(x, 112, 5, 6, false)\n      end\n    end\n  end\n\n  -- the pads (3 columns, or a 2x2 grid from tier 3)\n  for i = 1, TIERS[tier].pads do\n    local x, y, w, h = padRect(i)\n    local grow = flash[i] > 0 and 3 or 0\n    gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, PAD_COLORS[i], true)\n    if flash[i] > 0 then\n      gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, 7, false)\n      gfx.rect(x - grow + 1, y - grow + 1, w + grow * 2 - 2, h + grow * 2 - 2, 7, false)\n    else\n      gfx.rect(x, y, w, h, 0, false)\n    end\n    -- a little dimple so pads read as buttons\n    gfx.circle(x + math.floor(w / 2), y + math.floor(h / 2), 8, 7, false)\n  end\n\n  -- floating notes while jamming\n  for i = 1, #jamNotes do\n    local n = jamNotes[i]\n    local nx, ny = math.floor(n.x), math.floor(n.y)\n    gfx.circle(nx, ny, 2, n.c, true)\n    gfx.line(nx + 2, ny, nx + 2, ny - 6, n.c)\n  end\n\n  if state == "party" then\n    for i = 1, 5 do\n      local x = 24 + (i - 1) * 28\n      local y = 96 + math.floor(math.sin(t * 6 + i) * 8)\n      gfx.circle(x, y, 6, 10, true)\n      gfx.circle(x, y, 3, 7, true)\n    end\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Beat Bop: Simon for little ears. Big pads, each with its own note.\n-- The DJ blob sings a short pattern (pads flash); the kid taps it back.\n-- Success grows the pattern by one (up to 8, then a big party). Each party\n-- unlocks the next TIER \u2014 faster songs, fresh voices, and from tier 3 a\n-- fourth pad (the pads become a 2x2 grid, still toddler-sized). Tier shows\n-- as star badges under the blob. A miss just giggles and REPLAYS the same\n-- pattern \u2014 never punitive. B (or the corner note button) toggles free-play\n-- JAM mode: no pattern, every pad always live, the blob dances along.\n-- Canvas 480x320 (landscape, native hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- Layout: the DJ blob keeps a left column (jam button above, star badges and\n-- best below, progress dots as a vertical strip beside it); the pads fill the\n-- right side \u2014 3 tall columns, or a 2x2 grid from tier 3.\n\nlocal PAD_FREQ = { 262, 330, 392, 523 }   -- C E G C\nlocal PAD_COLORS = { 8, 10, 12, 11 }\nlocal PAD_X = 168\nlocal MAX_LEN = 8\nlocal MAX_TIER = 4\n\n-- tier voices per docs/05 tone waves: tri, then sine (faster), then square\n-- (fourth pad joins), then a mix \u2014 higher tiers sound fresh\nlocal TIERS = {\n  { pads = 3, step = 0.55, toneMs = 260, waves = { "tri", "tri", "tri" } },\n  { pads = 3, step = 0.44, toneMs = 210, waves = { "sine", "sine", "sine" } },\n  { pads = 4, step = 0.44, toneMs = 210, waves = { "square", "square", "square", "square" } },\n  { pads = 4, step = 0.36, toneMs = 180, waves = { "tri", "sine", "square", "tri" } },\n}\n\nlocal pattern = {}\nlocal state = "show"       -- "show" | "input" | "miss" | "good" | "party" | "jam"\nlocal stateT = 0\nlocal showIdx = 0\nlocal inputIdx = 0\nlocal flash = { 0, 0, 0, 0 }\nlocal best = 0\nlocal tier = 1             -- highest tier reached; runs always play at it\nlocal newStarT = 0         -- freshly-earned star flashes during the party\nlocal idleT = 0            -- replay help if the kid stalls\nlocal blobBop = 0\nlocal wobble = 0\nlocal jamNotes = {}        -- floating notes while jamming: {x, y, c, life}\nlocal t = 0\nlocal touchWasDown = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms, vol, wave)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms, vol = vol, wave = wave }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    local q = toneq[i]\n    if q.at <= now then\n      vupp.tone(q.freq, q.ms, q.vol or 0.8, q.wave or "tri")\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function padRect(i)\n  if TIERS[tier].pads == 3 then\n    return PAD_X + (i - 1) * 104, 24, 98, 288\n  end\n  local col = (i - 1) % 2\n  local row = i > 2 and 1 or 0\n  return PAD_X + col * 156, 24 + row * 148, 150, 140\nend\n\nlocal function playPad(i)\n  local tt = TIERS[tier]\n  local w = tt.waves[i] or "tri"\n  vupp.tone(PAD_FREQ[i], tt.toneMs, w == "square" and 0.55 or 0.8, w)\n  flash[i] = 0.35\n  blobBop = 0.3\nend\n\nlocal function newPattern(len)\n  pattern = {}\n  for i = 1, len do\n    pattern[i] = vupp.rand(TIERS[tier].pads)\n  end\n  state = "show"\n  stateT = -0.6   -- little breath before the pattern starts\n  showIdx = 0\n  inputIdx = 0\nend\n\nlocal function patternComplete()\n  local len = #pattern\n  if len > best then\n    best = len\n    vupp.store.set("best_streak", best)  -- hard-exit safe\n    vupp.emit("beat.streak", { length = len })\n  end\n  if len >= MAX_LEN then\n    state = "party"\n    stateT = 2.8\n    -- fanfare: square-lead arpeggio, sine octave shimmer, closing chord\n    scheduleTone(0.00, 523, 110, 0.7, "square")\n    scheduleTone(0.00, 1046, 110, 0.35, "sine")\n    scheduleTone(0.13, 659, 110, 0.7, "square")\n    scheduleTone(0.13, 1318, 110, 0.35, "sine")\n    scheduleTone(0.26, 784, 110, 0.7, "square")\n    scheduleTone(0.39, 1047, 110, 0.7, "square")\n    scheduleTone(0.52, 1319, 240, 0.8, "tri")\n    scheduleTone(0.52, 784, 240, 0.5, "sine")\n    scheduleTone(0.52, 523, 240, 0.4, "sine")\n    if tier < MAX_TIER then\n      -- first full song at this tier: the next challenge unlocks\n      tier = tier + 1\n      vupp.store.set("tier", tier)  -- hard-exit safe\n      vupp.emit("beat.tier", { tier = tier })\n      newStarT = 2.8\n    end\n  else\n    state = "good"\n    stateT = 0.9\n    scheduleTone(0.05, 660, 90)\n    scheduleTone(0.18, 880, 140)\n  end\nend\n\nlocal function padPressed(i)\n  if i > TIERS[tier].pads then\n    return\n  end\n  if state == "jam" then\n    -- free play: every pad always live, a note floats up inside the pad\n    playPad(i)\n    local x, y, w, h = padRect(i)\n    jamNotes[#jamNotes + 1] = {\n      x = x + vupp.rand(w) - 1, y = y + math.floor(h / 2), c = PAD_COLORS[i], life = 1,\n    }\n    return\n  end\n  if state ~= "input" then\n    return\n  end\n  playPad(i)\n  idleT = 0\n  if i == pattern[inputIdx + 1] then\n    inputIdx = inputIdx + 1\n    if inputIdx >= #pattern then\n      patternComplete()\n    end\n  else\n    -- a giggle, then the SAME pattern replays\n    state = "miss"\n    stateT = 1.0\n    wobble = 0.6\n    scheduleTone(0.30, 300, 70)\n    scheduleTone(0.40, 220, 70)\n    scheduleTone(0.50, 260, 110)\n  end\nend\n\nlocal function toggleJam()\n  if state == "jam" then\n    vupp.tone(523, 80, 0.6)\n    newPattern(1)\n  else\n    state = "jam"\n    jamNotes = {}\n    vupp.tone(784, 80, 0.6, "sine")\n  end\nend\n\nfunction vupp.init()\n  best = vupp.store.get("best_streak", 0)\n  tier = math.floor(vupp.store.get("tier", 1))\n  if tier < 1 then\n    tier = 1\n  elseif tier > MAX_TIER then\n    tier = MAX_TIER\n  end\n  newPattern(1)\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, 4 do\n    flash[i] = math.max(0, flash[i] - dt)\n  end\n  blobBop = math.max(0, blobBop - dt)\n  wobble = math.max(0, wobble - dt)\n  newStarT = math.max(0, newStarT - dt)\n\n  local i = 1\n  while i <= #jamNotes do\n    local n = jamNotes[i]\n    n.y = n.y - 60 * dt\n    n.life = n.life - dt\n    if n.life <= 0 then\n      table.remove(jamNotes, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if state == "show" then\n    stateT = stateT + dt\n    local step = math.floor(stateT / TIERS[tier].step) + 1\n    if step > showIdx and step <= #pattern then\n      showIdx = step\n      playPad(pattern[step])\n    elseif step > #pattern then\n      state = "input"\n      inputIdx = 0\n      idleT = 0\n    end\n  elseif state == "input" then\n    idleT = idleT + dt\n    if idleT > 6 then\n      -- gentle help: sing it again\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "miss" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "good" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(#pattern + 1)\n    end\n  elseif state == "party" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(1)   -- fresh run at the (maybe just-unlocked) tier\n    end\n  end\n\n  -- B toggles jam mode (engine v7: B belongs to gameplay)\n  if vupp.btnp("b") then\n    toggleJam()\n  end\n\n  -- d-pad chords onto the pads too\n  if TIERS[tier].pads == 3 then\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("down") then\n      padPressed(2)\n    elseif vupp.btnp("right") then\n      padPressed(3)\n    end\n  else\n    -- 2x2 grid: left/up = top row, down/right = bottom row\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("up") then\n      padPressed(2)\n    elseif vupp.btnp("down") then\n      padPressed(3)\n    elseif vupp.btnp("right") then\n      padPressed(4)\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown then\n      if touch.x < 68 and touch.y < 56 then\n        toggleJam()\n      elseif touch.x >= PAD_X - 12 then\n        local pi\n        if TIERS[tier].pads == 3 then\n          pi = math.max(1, math.min(3, math.floor((touch.x - PAD_X) / 104) + 1))\n        else\n          local col = touch.x < PAD_X + 156 and 0 or 1\n          local row = touch.y < 172 and 0 or 1\n          pi = row * 2 + col + 1\n        end\n        padPressed(pi)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawBlob(gfx)\n  local cx, cy = 76, 156\n  local bop = math.floor(blobBop * 40)\n  local ox = 0\n  if wobble > 0 then\n    ox = math.floor(math.sin(wobble * 30) * 8)\n  end\n  if state == "jam" then\n    -- the DJ dances along in free play\n    bop = bop + math.floor(math.abs(math.sin(t * 5)) * 12)\n    ox = ox + math.floor(math.sin(t * 2.5) * 12)\n  end\n  cx = cx + ox\n  cy = cy - bop\n  gfx.circle(cx, cy, 48, 11, true)\n  gfx.circle(cx, cy, 48, 3, false)\n  -- headphones\n  gfx.circle(cx - 44, cy - 4, 12, 5, true)\n  gfx.circle(cx + 44, cy - 4, 12, 5, true)\n  gfx.circle(cx, cy - 24, 50, 5, false)\n  -- face\n  gfx.circle(cx - 16, cy - 10, 6, 0, true)\n  gfx.circle(cx + 16, cy - 10, 6, 0, true)\n  if state == "show" or blobBop > 0 then\n    gfx.circle(cx, cy + 16, 10, 0, true)    -- singing mouth\n    gfx.circle(cx, cy + 18, 4, 8, true)\n  elseif state == "miss" then\n    gfx.line(cx - 10, cy + 18, cx + 10, cy + 14, 0)\n  else\n    gfx.line(cx - 12, cy + 12, cx - 4, cy + 20, 0)\n    gfx.line(cx - 4, cy + 20, cx + 4, cy + 20, 0)\n    gfx.line(cx + 4, cy + 20, cx + 12, cy + 12, 0)\n  end\n  -- music notes while singing\n  if state == "show" then\n    local nx = cx + 60 + math.floor(math.sin(t * 3) * 6)\n    local ny = cy - 36 - math.floor((stateT % TIERS[tier].step) * 24)\n    gfx.circle(nx, ny, 4, 7, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, 7)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- jam toggle button (top-left): note = free play, tiny pads = back to game\n  local jam = state == "jam"\n  gfx.rect(8, 8, 52, 36, jam and 9 or 5, true)\n  gfx.rect(8, 8, 52, 36, 7, false)\n  if jam then\n    gfx.rect(16, 18, 10, 16, 8, true)\n    gfx.rect(30, 18, 10, 16, 10, true)\n    gfx.rect(44, 18, 10, 16, 12, true)\n  else\n    gfx.circle(26, 32, 4, 7, true)\n    gfx.line(30, 32, 30, 16, 7)\n    gfx.line(30, 16, 38, 20, 7)\n  end\n\n  -- tier star badges (one per unlocked tier) under the blob; a fresh one flashes\n  for i = 1, tier do\n    local x = 20 + (i - 1) * 22\n    local r = 6\n    if newStarT > 0 and i == tier and math.floor(t * 8) % 2 == 0 then\n      r = 10\n    end\n    gfx.circle(x, 240, r, 10, true)\n    gfx.circle(x, 240, 2, 9, true)\n  end\n\n  -- best streak, gold-star convention (bottom of the blob column)\n  gfx.circle(32, 292, 8, 10, true)\n  gfx.circle(32, 292, 4, 9, true)\n  gfx.text(tostring(best), 48, 283, 10, 3)\n\n  drawBlob(gfx)\n\n  -- progress dots: one per note, filled as the kid plays it back \u2014\n  -- a vertical strip between the blob and the pads\n  if not jam then\n    local n = #pattern\n    local y0 = 168 - (n - 1) * 14\n    for i = 1, n do\n      local y = y0 + (i - 1) * 28\n      if i <= inputIdx then\n        gfx.circle(152, y, 10, 10, true)\n        gfx.circle(152, y, 10, 9, false)\n      else\n        gfx.circle(152, y, 10, 6, false)\n      end\n    end\n  end\n\n  -- the pads (3 tall columns, or a 2x2 grid from tier 3)\n  for i = 1, TIERS[tier].pads do\n    local x, y, w, h = padRect(i)\n    local grow = flash[i] > 0 and 6 or 0\n    gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, PAD_COLORS[i], true)\n    if flash[i] > 0 then\n      gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, 7, false)\n      gfx.rect(x - grow + 2, y - grow + 2, w + grow * 2 - 4, h + grow * 2 - 4, 7, false)\n    else\n      gfx.rect(x, y, w, h, 0, false)\n    end\n    -- a little dimple so pads read as buttons\n    gfx.circle(x + math.floor(w / 2), y + math.floor(h / 2), 16, 7, false)\n  end\n\n  -- floating notes while jamming\n  for i = 1, #jamNotes do\n    local n = jamNotes[i]\n    local nx, ny = math.floor(n.x), math.floor(n.y)\n    gfx.circle(nx, ny, 4, n.c, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, n.c)\n  end\n\n  if state == "party" then\n    for i = 1, 5 do\n      local x = 200 + (i - 1) * 60\n      local y = 160 + math.floor(math.sin(t * 6 + i) * 16)\n      gfx.circle(x, y, 12, 10, true)\n      gfx.circle(x, y, 6, 7, true)\n    end\n  end\nend\n'
       }
     },
     {
@@ -2262,19 +2313,20 @@ end
       category: "creative",
       summary: "tracks calm.sleep, calm.session; uses the touchscreen",
       palette: 16,
-      lines: 324,
+      lines: 325,
       files: {
         "app.json": `{
   "slug": "drift",
   "title": "Drift",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "creative",
   "fps": 30,
   "capabilities": [
     "touch"
   ],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -2367,7 +2419,8 @@ end
 -- Touch anywhere (or A) while it sleeps to float up and drift again.
 -- Long two-note sine swells pace each breath (exhale pitched lower and
 -- longer, the pattern that settles a wound-up nervous system). Canvas
--- 160x240, custom deep-water twilight palette (see app.json).
+-- 480x320 (native hires, engine v14), custom deep-water twilight palette
+-- (see app.json).
 
 local IN_T, OUT_T = 4.0, 6.0   -- inhale rise / longer exhale sink
 local ARC = 10                 -- breaths from the surface down to sleep
@@ -2381,7 +2434,7 @@ local breaths = 0              -- this float arc
 local done = {}                -- per-breath: 1 watched, 2 breathed together
 local glow = 0                 -- session warmth, grows breath by breath
 local settleT, sleepT, riseT = 0, 0, 0
-local settleY0 = 150
+local settleY0 = 200
 local touchWasDown = false
 local bubbles = {}             -- {x, y, vy, ph, age}
 local bubbleTick = 0
@@ -2462,21 +2515,21 @@ end
 local function jellyPos()
   if mode == "settle" then
     local p = smooth(math.min(1, settleT / 4))
-    return math.floor(settleY0 + (196 - settleY0) * p), 13
+    return math.floor(settleY0 + (248 - settleY0) * p), 26
   elseif mode == "sleep" then
-    return 196, 13
+    return 248, 26
   elseif mode == "rise" then
     local p = smooth(math.min(1, riseT / 2.5))
-    return math.floor(196 + (150 - 196) * p), 13
+    return math.floor(248 + (200 - 248) * p), 26
   end
   local k = breathK()
-  return math.floor(150 - 44 * k), math.floor(13 + 6 * k)
+  return math.floor(200 - 60 * k), math.floor(26 + 12 * k)
 end
 
 local function addBubble(x, y)
   if #bubbles >= 20 then table.remove(bubbles, 1) end
   bubbles[#bubbles + 1] = {
-    x = x, y = y, vy = -26 - vupp.rand(10),
+    x = x, y = y, vy = -52 - vupp.rand(20),
     ph = vupp.rand(628) / 100, age = 0,
   }
 end
@@ -2490,7 +2543,7 @@ local function finishBreath()
   done[breaths] = together and 2 or 1
   if together and glow < 10 then glow = glow + 1 end
   if breaths >= ARC then
-    settleY0 = 150 - 44 * breathK()
+    settleY0 = 200 - 60 * breathK()
     mode = "settle"
     settleT = 0
   else
@@ -2532,7 +2585,7 @@ function vupp.update(dt)
       local jy = select(1, jellyPos())
       bubbleTick = bubbleTick - dt
       if bubbleTick <= 0 then
-        addBubble(80 + vupp.rand(17) - 9, jy + 12)
+        addBubble(240 + vupp.rand(34) - 18, jy + 24)
         bubbleTick = 0.45
       end
       blubTick = blubTick - dt
@@ -2580,31 +2633,31 @@ function vupp.update(dt)
     local b = bubbles[i]
     b.y = b.y + b.vy * dt
     b.age = b.age + dt
-    if b.age > 1.6 or b.y < 4 then table.remove(bubbles, i) else i = i + 1 end
+    if b.age > 1.6 or b.y < 8 then table.remove(bubbles, i) else i = i + 1 end
   end
 end
 
 local PLANKTON = {
-  { 14, 34, 0.3 }, { 52, 20, 1.4 }, { 96, 40, 2.5 }, { 138, 24, 3.6 },
-  { 26, 78, 4.7 }, { 118, 88, 5.8 }, { 8, 130, 0.9 }, { 150, 140, 2.0 },
-  { 44, 116, 3.1 }, { 104, 128, 4.2 }, { 68, 66, 5.3 }, { 132, 62, 1.0 },
+  { 42, 46, 0.3 }, { 156, 26, 1.4 }, { 288, 54, 2.5 }, { 414, 32, 3.6 },
+  { 78, 104, 4.7 }, { 354, 118, 5.8 }, { 24, 174, 0.9 }, { 450, 186, 2.0 },
+  { 132, 154, 3.1 }, { 312, 170, 4.2 }, { 204, 88, 5.3 }, { 396, 82, 1.0 },
 }
 
 local function drawSeafloor(gfx)
-  gfx.rect(0, 214, 160, 26, 4, true)
+  gfx.rect(0, 276, 480, 44, 4, true)
   -- swaying seafoam strands
   for w = 1, 3 do
-    local wx = ({ 16, 76, 148 })[w]
+    local wx = ({ 60, 240, 408 })[w]
     for k = 0, 4 do
-      local sx = wx + math.floor(math.sin(t * 0.9 + k * 0.6 + w * 2) * 2)
-      gfx.circle(sx, 212 - k * 6, 2, 11, true)
+      local sx = wx + math.floor(math.sin(t * 0.9 + k * 0.6 + w * 2) * 4)
+      gfx.circle(sx, 272 - k * 12, 4, 11, true)
     end
   end
   -- anemones: soft round clusters, one per color
-  for _, a in ipairs({ { 40, 8 }, { 96, 14 }, { 124, 11 } }) do
-    gfx.circle(a[1], 214, 4, a[2], true)
-    gfx.circle(a[1] - 5, 216, 3, a[2], true)
-    gfx.circle(a[1] + 5, 216, 3, a[2], true)
+  for _, a in ipairs({ { 120, 8 }, { 264, 14 }, { 372, 11 } }) do
+    gfx.circle(a[1], 276, 8, a[2], true)
+    gfx.circle(a[1] - 10, 280, 6, a[2], true)
+    gfx.circle(a[1] + 10, 280, 6, a[2], true)
   end
 end
 
@@ -2613,69 +2666,69 @@ local function drawJelly(gfx)
   local asleep = mode == "sleep" or (mode == "settle" and settleT > 2.5)
   -- breath halo: the follow-me guide (only while floating)
   if mode == "float" then
-    gfx.circle(80, jy, math.floor(20 + 26 * breathK()), 12, false)
+    gfx.circle(240, jy, math.floor(40 + 52 * breathK()), 12, false)
   elseif mode == "sleep" then
-    gfx.circle(80, jy, math.floor(16 + 3 * math.sin(sleepT * 0.5)), 5, false)
+    gfx.circle(240, jy, math.floor(32 + 6 * math.sin(sleepT * 0.5)), 5, false)
   end
   -- tentacles trail below the bell
   for i = 1, 5 do
-    local baseX = 80 + (i - 3) * 5
+    local baseX = 240 + (i - 3) * 10
     for j = 1, 6 do
-      local sx = baseX + math.floor(math.sin(t * 1.6 + i + j * 0.5) * (1 + j * 0.6))
-      local sy = jy + bell + j * 5 - 2
-      if sy < 214 then
-        gfx.circle(sx, sy, (j < 4) and 2 or 1, (j == 6) and 15 or 13, true)
+      local sx = baseX + math.floor(math.sin(t * 1.6 + i + j * 0.5) * (2 + j * 1.2))
+      local sy = jy + bell + j * 10 - 4
+      if sy < 276 then
+        gfx.circle(sx, sy, (j < 4) and 4 or 2, (j == 6) and 15 or 13, true)
       end
     end
   end
   -- the bell, its warm glow core, and a highlight
-  gfx.circle(80, jy, bell, 13, true)
+  gfx.circle(240, jy, bell, 13, true)
   if glow > 0 then
-    gfx.circle(80, jy + 1, 1 + math.floor(bell * 0.5 * glow / 10), 10, true)
+    gfx.circle(240, jy + 2, 2 + math.floor(bell * 0.5 * glow / 10), 10, true)
   end
-  gfx.circle(80 - math.floor(bell / 3), jy - math.floor(bell / 3),
-    math.max(2, math.floor(bell / 4)), 15, true)
+  gfx.circle(240 - math.floor(bell / 3), jy - math.floor(bell / 3),
+    math.max(4, math.floor(bell / 4)), 15, true)
   -- face: open eyes while floating, closed while asleep
   if asleep then
-    gfx.line(74, jy - 2, 78, jy - 2, 0)
-    gfx.line(82, jy - 2, 86, jy - 2, 0)
+    gfx.line(228, jy - 4, 236, jy - 4, 0)
+    gfx.line(244, jy - 4, 252, jy - 4, 0)
   else
-    gfx.circle(76, jy - 2, 1, 0, true)
-    gfx.circle(84, jy - 2, 1, 0, true)
+    gfx.circle(232, jy - 4, 2, 0, true)
+    gfx.circle(248, jy - 4, 2, 0, true)
   end
-  gfx.line(78, jy + 4, 82, jy + 4, 0)
+  gfx.line(236, jy + 8, 244, jy + 8, 0)
 end
 
 function vupp.draw(gfx)
   -- deep-water bands, lighter near the surface
   gfx.clear(1)
-  gfx.rect(0, 0, 160, 70, 5, true)
-  gfx.rect(0, 70, 160, 80, 3, true)
+  gfx.rect(0, 0, 480, 92, 5, true)
+  gfx.rect(0, 92, 480, 108, 3, true)
   for _, p in ipairs(PLANKTON) do
     local b = math.sin(t * 0.6 + p[3])
     -- the deep twinkles a little more once the jelly is asleep
     local extra = (mode == "sleep") and 0.3 or 0
     if b > 0.5 - extra then
-      gfx.rect(p[1], p[2], 1, 1, 6, true)
+      gfx.rect(p[1], p[2], 2, 2, 6, true)
     end
   end
   drawSeafloor(gfx)
   drawJelly(gfx)
   for _, b in ipairs(bubbles) do
-    local bx = math.floor(b.x + math.sin(t * 2.5 + b.ph) * 2)
-    gfx.circle(bx, math.floor(b.y), 2, 12, false)
+    local bx = math.floor(b.x + math.sin(t * 2.5 + b.ph) * 4)
+    gfx.circle(bx, math.floor(b.y), 4, 12, false)
   end
   -- one tiny light per breath \u2014 progress you can feel, never a score
   for i = 1, ARC do
-    local x = 35 + (i - 1) * 10
+    local x = 150 + (i - 1) * 20
     local d = done[i]
     local lit = (mode == "sleep") and (math.sin(sleepT * 0.8 + i) > 0)
     if d == 2 or lit then
-      gfx.circle(x, 230, 2, 10, true)
+      gfx.circle(x, 300, 4, 10, true)
     elseif d == 1 then
-      gfx.circle(x, 230, 2, 6, true)
+      gfx.circle(x, 300, 4, 6, true)
     else
-      gfx.circle(x, 230, 2, 5, false)
+      gfx.circle(x, 300, 4, 5, false)
     end
   end
 end
@@ -2688,10 +2741,10 @@ end
       category: "learning",
       summary: "tracks math.round; uses the touchscreen",
       palette: 16,
-      lines: 442,
+      lines: 449,
       files: {
-        "app.json": '{\n  "slug": "fish-count",\n  "title": "Fish Count",\n  "version": "1.2.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 7,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "rounds_done": {\n              "type": "number",\n              "description": "Counting rounds your kid has finished"\n            },\n            "milestones": {\n              "type": "number",\n              "description": "Pearl strings completed (one per 5 rounds \u2014 each opens the treasure chest)"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much counting practice your kid has done"\n      }\n    },\n    "commands": {},\n    "events": {\n      "math.round": {\n        "description": "Your kid counted out the right number of fish",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "target": {\n              "type": "number",\n              "description": "The number they counted to"\n            },\n            "rounds_done": {\n              "type": "number",\n              "description": "Total rounds finished"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#10121f",\n    "#16305a",\n    "#6a3a64",\n    "#1e7a5a",\n    "#9a6a48",\n    "#5d6b78",\n    "#b8c7d1",\n    "#f4fbff",\n    "#f0604d",\n    "#f0973f",\n    "#f7d961",\n    "#59c98a",\n    "#4a9fd9",\n    "#8b7fae",\n    "#f490b8",\n    "#f5cf9e"\n  ]\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Fish Count: a big numeral (with counting dots) asks for N fish; tap N of\n-- the fish drifting by. Each tapped fish blows a happy bubble; tapping extra\n-- fish just giggles \u2014 no penalty, ever. Rounds ramp 1..9, then mix \u2014 and as\n-- lifetime rounds grow, two-digit targets (up to 15) unlock. Every 5 rounds\n-- fills the pearl string and the treasure chest throws a bigger party; the\n-- scene gently evolves with milestones (water tint, seaweed, new fish\n-- colors). D-pad works too: arrows hop a ring between fish, A counts the\n-- ringed fish. Canvas 160x240, custom ocean palette (see app.json).\n\nlocal WATER_TOP = 78\n\n-- seven-segment numerals (a,b,c,d,e,f,g) so numbers are BIG and chunky;\n-- 0 is the ones digit of 10.\nlocal SEG = {\n  [0] = { true, true, true, true, true, true, false },\n  [1] = { false, true, true, false, false, false, false },\n  [2] = { true, true, false, true, true, false, true },\n  [3] = { true, true, true, true, false, false, true },\n  [4] = { false, true, true, false, false, true, true },\n  [5] = { true, false, true, true, false, true, true },\n  [6] = { true, false, true, true, true, true, true },\n  [7] = { true, true, true, false, false, false, false },\n  [8] = { true, true, true, true, true, true, true },\n  [9] = { true, true, true, true, false, true, true },\n}\n\nlocal fish = {}           -- {x, y, dir, spd, size, color, counted, wob, ph}\nlocal bubbles = {}        -- {x, y, r, vy, life}\nlocal target = 1\nlocal progress = 0\nlocal roundsDone = 0\nlocal milestones = 0      -- every 5 rounds fills the pearl string\nlocal celebT = 0\nlocal celebKind = "round" -- "round" | "milestone"\nlocal t = 0\nlocal touchWasDown = false\nlocal sel = nil           -- d-pad selected fish index\nlocal dpadActive = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function addBubble(x, y, r)\n  bubbles[#bubbles + 1] = { x = x, y = y, r = r, vy = -20 - vupp.rand(20), life = 2 }\nend\n\n-- the school gains colors as milestones accrue\nlocal function fishColors()\n  local cols = { 8, 9, 10, 11, 14, 13, 15 }\n  if milestones >= 1 then cols[#cols + 1] = 6 end  -- a silver fish joins\n  if milestones >= 3 then cols[#cols + 1] = 2 end  -- ...then a plum one\n  return cols\nend\n\nlocal function spawnFish()\n  fish = {}\n  sel = nil\n  local count = math.max(9, target)  -- always enough fish for the target\n  local gap = 126 / math.max(8, count - 1)\n  local cols = fishColors()\n  for i = 1, count do\n    fish[i] = {\n      x = vupp.rand(150),\n      y = WATER_TOP + 8 + math.floor((i - 1) * gap) + vupp.rand(4),\n      dir = (i % 2 == 0) and 1 or -1,\n      spd = 12 + vupp.rand(14),\n      size = (count > 9) and (5 + vupp.rand(3)) or (7 + vupp.rand(4)),\n      color = cols[(i % #cols) + 1],\n      counted = false,\n      wob = 0,\n      ph = vupp.rand(628) / 100,\n    }\n  end\nend\n\n-- bigger numbers unlock with lifetime practice: 9 \u2192 12 \u2192 15\nlocal function maxTarget()\n  if roundsDone >= 25 then return 15 end\n  if roundsDone >= 15 then return 12 end\n  return 9\nend\n\nlocal function newRound()\n  if roundsDone < 9 then\n    target = roundsDone + 1   -- gentle ramp 1,2,3..9 \u2014 beginners start tiny\n  else\n    target = vupp.rand(maxTarget())\n  end\n  progress = 0\n  spawnFish()\nend\n\nfunction vupp.init()\n  roundsDone = vupp.store.get("rounds_done", 0)\n  -- derive for kids who played before milestones existed\n  milestones = vupp.store.get("milestones", math.floor(roundsDone / 5))\n  newRound()\nend\n\nlocal function fishTapped(f)\n  if not f.counted and progress < target then\n    f.counted = true\n    progress = progress + 1\n    addBubble(f.x + f.dir * (f.size + 2), f.y - f.size, 2 + vupp.rand(2))\n    vupp.tone(440 + progress * 70, 80, 0.7)\n    if progress == target then\n      roundsDone = roundsDone + 1\n      vupp.store.set("rounds_done", roundsDone)  -- hard-exit safe\n      vupp.emit("math.round", { target = target, rounds_done = roundsDone })\n      if roundsDone % 5 == 0 then\n        -- fifth pearl: the treasure chest pops open \u2014 a bigger party\n        milestones = milestones + 1\n        vupp.store.set("milestones", milestones)\n        celebKind = "milestone"\n        celebT = 3.5\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 160)\n        scheduleTone(1.05, 784, 90)\n        scheduleTone(1.20, 988, 90)\n        scheduleTone(1.35, 1319, 260)\n        for _ = 1, 24 do\n          addBubble(vupp.rand(150), WATER_TOP + 20 + vupp.rand(120), 1 + vupp.rand(3))\n        end\n      else\n        celebKind = "round"\n        celebT = 2.0\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 200)\n        for _ = 1, 14 do\n          addBubble(vupp.rand(150), WATER_TOP + 20 + vupp.rand(120), 1 + vupp.rand(3))\n        end\n      end\n    end\n  else\n    -- extra fish just giggle \u2014 never a penalty\n    f.wob = 0.5\n    scheduleTone(0.00, 300, 60)\n    scheduleTone(0.08, 420, 60)\n    scheduleTone(0.16, 350, 80)\n  end\nend\n\nlocal function pickCenterFish()\n  local bi, bd\n  for i = 1, #fish do\n    local dx = fish[i].x - 80\n    local dy = fish[i].y - 155\n    local d = dx * dx + dy * dy\n    if not bd or d < bd then bi, bd = i, d end\n  end\n  return bi\nend\n\n-- hop the selection ring to the nearest fish in the pressed direction\nlocal function moveSel(dx, dy)\n  dpadActive = true\n  if not sel or not fish[sel] then\n    sel = pickCenterFish()\n    return\n  end\n  local f = fish[sel]\n  local bi, bs\n  for i = 1, #fish do\n    if i ~= sel then\n      local rx = fish[i].x - f.x\n      local ry = fish[i].y - f.y\n      local fwd = rx * dx + ry * dy\n      if fwd > 0 then\n        local side = math.abs(rx * dy) + math.abs(ry * dx)\n        local score = fwd + side * 2\n        if not bs or score < bs then bi, bs = i, score end\n      end\n    end\n  end\n  if bi then\n    sel = bi\n    vupp.tone(660, 30, 0.3)\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, #fish do\n    local f = fish[i]\n    f.x = f.x + f.dir * f.spd * dt\n    if f.x > 175 then\n      f.x = -15\n    elseif f.x < -15 then\n      f.x = 175\n    end\n    f.wob = math.max(0, f.wob - dt)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y + b.vy * dt\n    b.life = b.life - dt\n    if b.life <= 0 or b.y < WATER_TOP + 4 then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if celebT > 0 then\n    celebT = celebT - dt\n    if celebT <= 0 then\n      celebT = 0\n      newRound()\n    end\n  end\n\n  -- d-pad fallback: arrows hop the ring, A counts the ringed fish\n  if vupp.btnp("left") then\n    moveSel(-1, 0)\n  elseif vupp.btnp("right") then\n    moveSel(1, 0)\n  elseif vupp.btnp("up") then\n    moveSel(0, -1)\n  elseif vupp.btnp("down") then\n    moveSel(0, 1)\n  end\n  if vupp.btnp("a") and celebT == 0 then\n    dpadActive = true\n    if not sel or not fish[sel] then\n      sel = pickCenterFish()\n    end\n    if sel and fish[sel] then\n      fishTapped(fish[sel])\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown and celebT == 0 and touch.y >= WATER_TOP then\n      dpadActive = false  -- finger takes over from the ring\n      -- nearest fish within a fat finger radius\n      local hit, hd = nil, 24 * 24\n      for k = 1, #fish do\n        local f = fish[k]\n        local dx = touch.x - f.x\n        local dy = touch.y - f.y\n        local d = dx * dx + dy * dy\n        if d < hd then\n          hit, hd = f, d\n        end\n      end\n      if hit then\n        fishTapped(hit)\n      else\n        addBubble(touch.x, touch.y, 1 + vupp.rand(2))  -- any touch blubs\n        vupp.tone(240, 40, 0.3)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawNumeral(gfx, n, ox, oy, L, T)\n  local s = SEG[n]\n  local c = 10\n  if s[1] then gfx.rect(ox + T, oy, L, T, c, true) end\n  if s[2] then gfx.rect(ox + T + L, oy + T, T, L, c, true) end\n  if s[3] then gfx.rect(ox + T + L, oy + 2 * T + L, T, L, c, true) end\n  if s[4] then gfx.rect(ox + T, oy + 2 * T + 2 * L, L, T, c, true) end\n  if s[5] then gfx.rect(ox, oy + 2 * T + L, T, L, c, true) end\n  if s[6] then gfx.rect(ox, oy + T, T, L, c, true) end\n  if s[7] then gfx.rect(ox + T, oy + T + L, L, T, c, true) end\n  -- bridge vertical joints so bare columns (like "1") read as one bar\n  if s[2] and s[3] then gfx.rect(ox + T + L, oy + T + L, T, T, c, true) end\n  if s[5] and s[6] then gfx.rect(ox, oy + T + L, T, T, c, true) end\nend\n\nlocal function fishScreenY(f)\n  return math.floor(f.y + math.sin(t * 2 + f.ph) * 2)\nend\n\nlocal function drawFish(gfx, f)\n  local x = math.floor(f.x)\n  local y = fishScreenY(f)\n  if f.wob > 0 then\n    x = x + math.floor(math.sin(f.wob * 30) * 3)\n  end\n  local s = f.size\n  -- tail\n  gfx.rect(x - f.dir * (s + 3) - 2, y - 3, 4, 6, f.color, true)\n  gfx.rect(x - f.dir * (s + 5) - 2, y - 5, 4, 10, f.color, true)\n  -- body\n  gfx.circle(x, y, s, f.color, true)\n  -- fin + eye + mouth\n  gfx.circle(x, y + 2, 2, 7, true)\n  local ex = x + f.dir * math.floor(s * 0.5)\n  gfx.circle(ex, y - 2, 2, 7, true)\n  gfx.circle(ex + f.dir, y - 2, 1, 0, true)\n  if f.counted then\n    gfx.circle(x, y - s - 5, 3, 10, false)  -- counted: a golden ring above\n  end\nend\n\nfunction vupp.draw(gfx)\n  -- water tint slowly cycles as milestones accrue\n  local water = ({ 12, 3, 1 })[(milestones % 3) + 1]\n  gfx.clear(water)\n\n  -- sea floor\n  gfx.rect(0, 228, 160, 12, 15, true)\n  gfx.circle(20, 230, 5, 11, true)\n  gfx.circle(70, 232, 4, 11, true)\n\n  -- seaweed sways in once the first pearl string is full\n  local weedCol = (water == 3) and 1 or 3\n  for w = 1, math.min(3, milestones) do\n    local wx = ({ 34, 104, 62 })[w]\n    for k = 0, 5 do\n      local sx = wx + math.floor(math.sin(t * 1.5 + k * 0.7 + w) * 3)\n      gfx.circle(sx, 226 - k * 8, 3, weedCol, true)\n    end\n  end\n\n  -- treasure chest on the floor; pops open at every fifth pearl\n  local open = celebKind == "milestone" and celebT > 0\n  gfx.rect(126, 216, 26, 12, 4, true)\n  gfx.rect(137, 216, 4, 12, 10, true)\n  if open then\n    gfx.rect(126, 204, 26, 5, 2, true)\n    gfx.circle(139, 213, 5, 10, false)\n    for k = 1, 3 do\n      local py = 208 - math.floor((3.5 - celebT) * 18) - k * 6\n      if py > WATER_TOP then\n        gfx.circle(125 + k * 7, py, 3, 7, true)\n      end\n    end\n  else\n    gfx.rect(126, 210, 26, 6, 2, true)\n  end\n\n  -- numeral panel + counting dots\n  gfx.rect(10, 6, 60, 62, 1, true)\n  gfx.rect(10, 6, 60, 62, 13, false)\n  if target < 10 then\n    drawNumeral(gfx, target, 25, 11, 20, 5)\n  else\n    -- two smaller digits side by side\n    drawNumeral(gfx, math.floor(target / 10), 14, 17, 11, 4)\n    drawNumeral(gfx, target % 10, 39, 17, 11, 4)\n  end\n  if target <= 9 then\n    for i = 1, target do\n      local dx = 84 + ((i - 1) % 5) * 16\n      local dy = 20 + math.floor((i - 1) / 5) * 18\n      if i <= progress then\n        gfx.circle(dx, dy, 6, 10, true)\n        gfx.circle(dx, dy, 6, 9, false)\n      else\n        gfx.circle(dx, dy, 6, 7, false)\n      end\n    end\n  else\n    for i = 1, target do\n      local dx = 82 + ((i - 1) % 5) * 16\n      local dy = 16 + math.floor((i - 1) / 5) * 17\n      if i <= progress then\n        gfx.circle(dx, dy, 5, 10, true)\n        gfx.circle(dx, dy, 5, 9, false)\n      else\n        gfx.circle(dx, dy, 5, 7, false)\n      end\n    end\n  end\n\n  -- pearl string: one pearl per round, five opens the chest\n  local shown = roundsDone % 5\n  if celebKind == "milestone" and celebT > 0 then shown = 5 end\n  gfx.line(76, 71, 148, 71, 13)\n  for i = 1, 5 do\n    local px = 82 + (i - 1) * 15\n    if i <= shown then\n      local flash = celebKind == "milestone" and celebT > 0 and math.floor(t * 8) % 2 == 0\n      gfx.circle(px, 71, 4, flash and 10 or 7, true)\n      gfx.circle(px, 71, 4, 6, false)\n    else\n      gfx.circle(px, 71, 3, 13, false)\n    end\n  end\n\n  for i = 1, #fish do\n    drawFish(gfx, fish[i])\n  end\n\n  -- d-pad selection ring\n  if dpadActive and sel and fish[sel] and celebT == 0 then\n    local f = fish[sel]\n    local fy = fishScreenY(f)\n    local r = f.size + 4 + math.floor(math.abs(math.sin(t * 5)) * 3)\n    gfx.circle(math.floor(f.x), fy, r, 7, false)\n    gfx.circle(math.floor(f.x), fy, r + 1, 10, false)\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), b.r, 7, false)\n  end\n\n  if celebT > 0 then\n    -- happy wiggling banner of stars over the water (two rows on milestones)\n    local rows = celebKind == "milestone" and 2 or 1\n    for j = 1, rows do\n      for i = 1, 5 do\n        local x = 24 + (i - 1) * 28\n        local y = 104 + (j - 1) * 22 + math.floor(math.sin(t * 6 + i + j) * 8)\n        gfx.circle(x, y, 6, 10, true)\n        gfx.circle(x, y, 3, 9, true)\n      end\n    end\n  end\nend\n'
+        "app.json": '{\n  "slug": "fish-count",\n  "title": "Fish Count",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "rounds_done": {\n              "type": "number",\n              "description": "Counting rounds your kid has finished"\n            },\n            "milestones": {\n              "type": "number",\n              "description": "Pearl strings completed (one per 5 rounds \u2014 each opens the treasure chest)"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much counting practice your kid has done"\n      }\n    },\n    "commands": {},\n    "events": {\n      "math.round": {\n        "description": "Your kid counted out the right number of fish",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "target": {\n              "type": "number",\n              "description": "The number they counted to"\n            },\n            "rounds_done": {\n              "type": "number",\n              "description": "Total rounds finished"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#10121f",\n    "#16305a",\n    "#6a3a64",\n    "#1e7a5a",\n    "#9a6a48",\n    "#5d6b78",\n    "#b8c7d1",\n    "#f4fbff",\n    "#f0604d",\n    "#f0973f",\n    "#f7d961",\n    "#59c98a",\n    "#4a9fd9",\n    "#8b7fae",\n    "#f490b8",\n    "#f5cf9e"\n  ]\n}\n',
+        "main.lua": '-- luacheck: globals vupp\n-- Fish Count: a big numeral (with counting dots) asks for N fish; tap N of\n-- the fish drifting by. Each tapped fish blows a happy bubble; tapping extra\n-- fish just giggles \u2014 no penalty, ever. Rounds ramp 1..9, then mix \u2014 and as\n-- lifetime rounds grow, two-digit targets (up to 15) unlock. Every 5 rounds\n-- fills the pearl string and the treasure chest throws a bigger party; the\n-- scene gently evolves with milestones (water tint, seaweed, new fish\n-- colors). D-pad works too: arrows hop a ring between fish, A counts the\n-- ringed fish. Native 480x320 landscape canvas (hires, engine v14): the\n-- numeral panel + pearls live in a left column, counting dots run along the\n-- top of the water, and the fish get the whole wide tank. Custom ocean\n-- palette (see app.json).\n\nlocal WATER_LEFT = 132  -- water (and taps) start right of the HUD column\nlocal DOTS_BOTTOM = 36  -- counting-dot strip along the top of the water\n\n-- seven-segment numerals (a,b,c,d,e,f,g) so numbers are BIG and chunky;\n-- 0 is the ones digit of 10.\nlocal SEG = {\n  [0] = { true, true, true, true, true, true, false },\n  [1] = { false, true, true, false, false, false, false },\n  [2] = { true, true, false, true, true, false, true },\n  [3] = { true, true, true, true, false, false, true },\n  [4] = { false, true, true, false, false, true, true },\n  [5] = { true, false, true, true, false, true, true },\n  [6] = { true, false, true, true, true, true, true },\n  [7] = { true, true, true, false, false, false, false },\n  [8] = { true, true, true, true, true, true, true },\n  [9] = { true, true, true, true, false, true, true },\n}\n\nlocal fish = {}           -- {x, y, dir, spd, size, color, counted, wob, ph}\nlocal bubbles = {}        -- {x, y, r, vy, life}\nlocal target = 1\nlocal progress = 0\nlocal roundsDone = 0\nlocal milestones = 0      -- every 5 rounds fills the pearl string\nlocal celebT = 0\nlocal celebKind = "round" -- "round" | "milestone"\nlocal t = 0\nlocal touchWasDown = false\nlocal sel = nil           -- d-pad selected fish index\nlocal dpadActive = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function addBubble(x, y, r)\n  bubbles[#bubbles + 1] = { x = x, y = y, r = r, vy = -40 - vupp.rand(40), life = 2 }\nend\n\n-- the school gains colors as milestones accrue\nlocal function fishColors()\n  local cols = { 8, 9, 10, 11, 14, 13, 15 }\n  if milestones >= 1 then cols[#cols + 1] = 6 end  -- a silver fish joins\n  if milestones >= 3 then cols[#cols + 1] = 2 end  -- ...then a plum one\n  return cols\nend\n\nlocal function spawnFish()\n  fish = {}\n  sel = nil\n  local count = math.max(9, target)  -- always enough fish for the target\n  local gap = 224 / math.max(8, count - 1)\n  local cols = fishColors()\n  for i = 1, count do\n    fish[i] = {\n      x = WATER_LEFT + vupp.rand(340),\n      y = DOTS_BOTTOM + 8 + math.floor((i - 1) * gap) + vupp.rand(8),\n      dir = (i % 2 == 0) and 1 or -1,\n      spd = 24 + vupp.rand(28),\n      size = (count > 9) and (10 + vupp.rand(6)) or (14 + vupp.rand(8)),\n      color = cols[(i % #cols) + 1],\n      counted = false,\n      wob = 0,\n      ph = vupp.rand(628) / 100,\n    }\n  end\nend\n\n-- bigger numbers unlock with lifetime practice: 9 \u2192 12 \u2192 15\nlocal function maxTarget()\n  if roundsDone >= 25 then return 15 end\n  if roundsDone >= 15 then return 12 end\n  return 9\nend\n\nlocal function newRound()\n  if roundsDone < 9 then\n    target = roundsDone + 1   -- gentle ramp 1,2,3..9 \u2014 beginners start tiny\n  else\n    target = vupp.rand(maxTarget())\n  end\n  progress = 0\n  spawnFish()\nend\n\nfunction vupp.init()\n  roundsDone = vupp.store.get("rounds_done", 0)\n  -- derive for kids who played before milestones existed\n  milestones = vupp.store.get("milestones", math.floor(roundsDone / 5))\n  newRound()\nend\n\nlocal function fishTapped(f)\n  if not f.counted and progress < target then\n    f.counted = true\n    progress = progress + 1\n    addBubble(f.x + f.dir * (f.size + 4), f.y - f.size, 4 + vupp.rand(4))\n    vupp.tone(440 + progress * 70, 80, 0.7)\n    if progress == target then\n      roundsDone = roundsDone + 1\n      vupp.store.set("rounds_done", roundsDone)  -- hard-exit safe\n      vupp.emit("math.round", { target = target, rounds_done = roundsDone })\n      if roundsDone % 5 == 0 then\n        -- fifth pearl: the treasure chest pops open \u2014 a bigger party\n        milestones = milestones + 1\n        vupp.store.set("milestones", milestones)\n        celebKind = "milestone"\n        celebT = 3.5\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 160)\n        scheduleTone(1.05, 784, 90)\n        scheduleTone(1.20, 988, 90)\n        scheduleTone(1.35, 1319, 260)\n        for _ = 1, 24 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      else\n        celebKind = "round"\n        celebT = 2.0\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 200)\n        for _ = 1, 14 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      end\n    end\n  else\n    -- extra fish just giggle \u2014 never a penalty\n    f.wob = 0.5\n    scheduleTone(0.00, 300, 60)\n    scheduleTone(0.08, 420, 60)\n    scheduleTone(0.16, 350, 80)\n  end\nend\n\nlocal function pickCenterFish()\n  local bi, bd\n  for i = 1, #fish do\n    local dx = fish[i].x - 304\n    local dy = fish[i].y - 160\n    local d = dx * dx + dy * dy\n    if not bd or d < bd then bi, bd = i, d end\n  end\n  return bi\nend\n\n-- hop the selection ring to the nearest fish in the pressed direction\nlocal function moveSel(dx, dy)\n  dpadActive = true\n  if not sel or not fish[sel] then\n    sel = pickCenterFish()\n    return\n  end\n  local f = fish[sel]\n  local bi, bs\n  for i = 1, #fish do\n    if i ~= sel then\n      local rx = fish[i].x - f.x\n      local ry = fish[i].y - f.y\n      local fwd = rx * dx + ry * dy\n      if fwd > 0 then\n        local side = math.abs(rx * dy) + math.abs(ry * dx)\n        local score = fwd + side * 2\n        if not bs or score < bs then bi, bs = i, score end\n      end\n    end\n  end\n  if bi then\n    sel = bi\n    vupp.tone(660, 30, 0.3)\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, #fish do\n    local f = fish[i]\n    f.x = f.x + f.dir * f.spd * dt\n    if f.x > 510 then\n      f.x = WATER_LEFT - 30\n    elseif f.x < WATER_LEFT - 30 then\n      f.x = 510\n    end\n    f.wob = math.max(0, f.wob - dt)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y + b.vy * dt\n    b.life = b.life - dt\n    if b.life <= 0 or b.y < DOTS_BOTTOM then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if celebT > 0 then\n    celebT = celebT - dt\n    if celebT <= 0 then\n      celebT = 0\n      newRound()\n    end\n  end\n\n  -- d-pad fallback: arrows hop the ring, A counts the ringed fish\n  if vupp.btnp("left") then\n    moveSel(-1, 0)\n  elseif vupp.btnp("right") then\n    moveSel(1, 0)\n  elseif vupp.btnp("up") then\n    moveSel(0, -1)\n  elseif vupp.btnp("down") then\n    moveSel(0, 1)\n  end\n  if vupp.btnp("a") and celebT == 0 then\n    dpadActive = true\n    if not sel or not fish[sel] then\n      sel = pickCenterFish()\n    end\n    if sel and fish[sel] then\n      fishTapped(fish[sel])\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown and celebT == 0 and touch.x >= WATER_LEFT then\n      dpadActive = false  -- finger takes over from the ring\n      -- nearest fish within a fat finger radius\n      local hit, hd = nil, 48 * 48\n      for k = 1, #fish do\n        local f = fish[k]\n        local dx = touch.x - f.x\n        local dy = touch.y - f.y\n        local d = dx * dx + dy * dy\n        if d < hd then\n          hit, hd = f, d\n        end\n      end\n      if hit then\n        fishTapped(hit)\n      else\n        addBubble(touch.x, touch.y, 2 + vupp.rand(4))  -- any touch blubs\n        vupp.tone(240, 40, 0.3)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawNumeral(gfx, n, ox, oy, L, T)\n  local s = SEG[n]\n  local c = 10\n  if s[1] then gfx.rect(ox + T, oy, L, T, c, true) end\n  if s[2] then gfx.rect(ox + T + L, oy + T, T, L, c, true) end\n  if s[3] then gfx.rect(ox + T + L, oy + 2 * T + L, T, L, c, true) end\n  if s[4] then gfx.rect(ox + T, oy + 2 * T + 2 * L, L, T, c, true) end\n  if s[5] then gfx.rect(ox, oy + 2 * T + L, T, L, c, true) end\n  if s[6] then gfx.rect(ox, oy + T, T, L, c, true) end\n  if s[7] then gfx.rect(ox + T, oy + T + L, L, T, c, true) end\n  -- bridge vertical joints so bare columns (like "1") read as one bar\n  if s[2] and s[3] then gfx.rect(ox + T + L, oy + T + L, T, T, c, true) end\n  if s[5] and s[6] then gfx.rect(ox, oy + T + L, T, T, c, true) end\nend\n\nlocal function fishScreenY(f)\n  return math.floor(f.y + math.sin(t * 2 + f.ph) * 4)\nend\n\nlocal function drawFish(gfx, f)\n  local x = math.floor(f.x)\n  local y = fishScreenY(f)\n  if f.wob > 0 then\n    x = x + math.floor(math.sin(f.wob * 30) * 6)\n  end\n  local s = f.size\n  -- tail\n  gfx.rect(x - f.dir * (s + 6) - 4, y - 6, 8, 12, f.color, true)\n  gfx.rect(x - f.dir * (s + 10) - 4, y - 10, 8, 20, f.color, true)\n  -- body\n  gfx.circle(x, y, s, f.color, true)\n  -- fin + eye + mouth\n  gfx.circle(x, y + 4, 4, 7, true)\n  local ex = x + f.dir * math.floor(s * 0.5)\n  gfx.circle(ex, y - 4, 4, 7, true)\n  gfx.circle(ex + f.dir * 2, y - 4, 2, 0, true)\n  if f.counted then\n    gfx.circle(x, y - s - 10, 6, 10, false)  -- counted: a golden ring above\n  end\nend\n\nfunction vupp.draw(gfx)\n  -- water tint slowly cycles as milestones accrue\n  local water = ({ 12, 3, 1 })[(milestones % 3) + 1]\n  gfx.clear(water)\n\n  -- sea floor\n  gfx.rect(0, 296, 480, 24, 15, true)\n  gfx.circle(176, 300, 10, 11, true)\n  gfx.circle(300, 304, 8, 11, true)\n\n  -- seaweed sways in once the first pearl string is full\n  local weedCol = (water == 3) and 1 or 3\n  for w = 1, math.min(3, milestones) do\n    local wx = ({ 184, 372, 276 })[w]\n    for k = 0, 5 do\n      local sx = wx + math.floor(math.sin(t * 1.5 + k * 0.7 + w) * 6)\n      gfx.circle(sx, 292 - k * 16, 6, weedCol, true)\n    end\n  end\n\n  -- treasure chest on the floor; pops open at every fifth pearl\n  local open = celebKind == "milestone" and celebT > 0\n  gfx.rect(412, 272, 52, 24, 4, true)\n  gfx.rect(434, 272, 8, 24, 10, true)\n  if open then\n    gfx.rect(412, 248, 52, 10, 2, true)\n    gfx.circle(438, 266, 10, 10, false)\n    for k = 1, 3 do\n      local py = 256 - math.floor((3.5 - celebT) * 36) - k * 12\n      if py > DOTS_BOTTOM then\n        gfx.circle(410 + k * 14, py, 6, 7, true)\n      end\n    end\n  else\n    gfx.rect(412, 260, 52, 12, 2, true)\n  end\n\n  for i = 1, #fish do\n    drawFish(gfx, fish[i])\n  end\n\n  -- HUD column: numeral panel over the fish (they slide in behind it)\n  gfx.rect(0, 0, WATER_LEFT - 4, 320, water, true)\n  gfx.rect(8, 12, 112, 124, 1, true)\n  gfx.rect(8, 12, 112, 124, 13, false)\n  if target < 10 then\n    drawNumeral(gfx, target, 34, 20, 40, 10)\n  else\n    -- two smaller digits side by side\n    drawNumeral(gfx, math.floor(target / 10), 16, 34, 22, 8)\n    drawNumeral(gfx, target % 10, 66, 34, 22, 8)\n  end\n\n  -- counting dots run along the top of the water\n  if target <= 9 then\n    for i = 1, target do\n      local dx = 148 + (i - 1) * 36\n      if i <= progress then\n        gfx.circle(dx, 18, 12, 10, true)\n        gfx.circle(dx, 18, 12, 9, false)\n      else\n        gfx.circle(dx, 18, 12, 7, false)\n      end\n    end\n  else\n    for i = 1, target do\n      local dx = 142 + (i - 1) * 22\n      if i <= progress then\n        gfx.circle(dx, 18, 8, 10, true)\n        gfx.circle(dx, 18, 8, 9, false)\n      else\n        gfx.circle(dx, 18, 8, 7, false)\n      end\n    end\n  end\n\n  -- pearl string: one pearl per round, five opens the chest\n  local shown = roundsDone % 5\n  if celebKind == "milestone" and celebT > 0 then shown = 5 end\n  gfx.line(12, 164, 116, 164, 13)\n  for i = 1, 5 do\n    local px = 20 + (i - 1) * 24\n    if i <= shown then\n      local flash = celebKind == "milestone" and celebT > 0 and math.floor(t * 8) % 2 == 0\n      gfx.circle(px, 164, 8, flash and 10 or 7, true)\n      gfx.circle(px, 164, 8, 6, false)\n    else\n      gfx.circle(px, 164, 6, 13, false)\n    end\n  end\n\n  -- d-pad selection ring\n  if dpadActive and sel and fish[sel] and celebT == 0 then\n    local f = fish[sel]\n    local fy = fishScreenY(f)\n    local r = f.size + 8 + math.floor(math.abs(math.sin(t * 5)) * 6)\n    gfx.circle(math.floor(f.x), fy, r, 7, false)\n    gfx.circle(math.floor(f.x), fy, r + 2, 10, false)\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), b.r, 7, false)\n  end\n\n  if celebT > 0 then\n    -- happy wiggling banner of stars over the water (two rows on milestones)\n    local rows = celebKind == "milestone" and 2 or 1\n    for j = 1, rows do\n      for i = 1, 5 do\n        local x = 192 + (i - 1) * 56\n        local y = 124 + (j - 1) * 44 + math.floor(math.sin(t * 6 + i + j) * 16)\n        gfx.circle(x, y, 12, 10, true)\n        gfx.circle(x, y, 6, 9, true)\n      end\n    end\n  end\nend\n'
       }
     },
     {
@@ -2700,10 +2753,10 @@ end
       category: "game",
       summary: "tracks maze.level_done, maze.all_done",
       palette: 0,
-      lines: 609,
+      lines: 613,
       files: {
-        "app.json": '{\n  "slug": "maze",\n  "title": "Maze",\n  "version": "1.1.0",\n  "author": "Vupp",\n  "category": "game",\n  "fps": 30,\n  "capabilities": [],\n  "min_engine": 7,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The maze level your kid will play next (after 20 the SUPER MAZE loop begins)"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found tucked away off the maze paths"\n            },\n            "all_done": {\n              "type": "boolean",\n              "description": "True once your kid has finished all 20 mazes at least once"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How far your kid has gotten in the maze, plus bonus stars found"\n      }\n    },\n    "commands": {},\n    "events": {\n      "maze.level_done": {\n        "description": "Your kid guided the critter all the way through a maze",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The level that was just finished"\n            }\n          }\n        }\n      },\n      "maze.all_done": {\n        "description": "Your kid finished all 20 mazes - the SUPER MAZE loop is unlocked!",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found so far"\n            }\n          }\n        }\n      }\n    }\n  }\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Maze: walk a little round critter through a maze to the cookie.\n-- D-pad only, no timer, no lives; walls just gently bounce.\n-- v1.1: 20 hand-authored mazes, bonus star cookies tucked off the path,\n-- soft step blips + a munch at the cookie, a big "you did all 20!" moment,\n-- and a labeled SUPER MAZE loop afterwards (same mazes, walked backwards,\n-- new wall colors) instead of a silent recycle.\n-- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).\n\n-- Level data: "#" wall, "." floor, "S" start, "G" goal (cookie),\n-- "*" bonus star cookie (off the direct path).\n-- All levels validated solvable; after 20 they loop as SUPER MAZE\n-- (start and cookie swap places, so every maze walks the other way).\nlocal LEVELS = {\n  { -- 1: one bend\n    "#####",\n    "#S..#",\n    "###.#",\n    "#G..#",\n    "#####",\n  },\n  { -- 2: a couple of turns\n    "#######",\n    "#S....#",\n    "#####.#",\n    "#..#..#",\n    "#..#.##",\n    "#G...##",\n    "#######",\n  },\n  { -- 3: serpentine\n    "#######",\n    "#S#...#",\n    "#.#.#.#",\n    "#...#.#",\n    "###.#.#",\n    "#...#.#",\n    "#.###.#",\n    "#....G#",\n    "#######",\n  },\n  { -- 4: first dead end (with a bonus star in it)\n    "########",\n    "#S...#G#",\n    "####.#.#",\n    "#....#.#",\n    "#.####.#",\n    "#......#",\n    "#.####.#",\n    "#.*#...#",\n    "########",\n  },\n  { -- 5: wide breather with forks\n    "#########",\n    "#...#..G#",\n    "#.#.#.###",\n    "#S#...###",\n    "#########",\n  },\n  { -- 6: taller winder (star on the bottom lane)\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#...*...#",\n    "#########",\n  },\n  { -- 7: long way around\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 8: spiral\n    "#########",\n    "#.......#",\n    "#.#####.#",\n    "#.#G..#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#S#...#.#",\n    "#.###.#.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 9: forks everywhere\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#G#",\n    "#.....#.#",\n    "#####...#",\n    "#########",\n  },\n  { -- 10: the big one\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#.....#",\n    "#.#.#####",\n    "#...#..G#",\n    "#.####.##",\n    "#......##",\n    "#########",\n  },\n  { -- 11: side pocket with a star\n    "#########",\n    "#S..#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 12: the decoy web (star deep inside it)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#*#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 13: tall twin combs\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 14: two towers (star on the high shelf)\n    "#########",\n    "#S..#..*#",\n    "#.#.#.###",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#..G#",\n    "#########",\n  },\n  { -- 15: down and around\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 16: the long spiral\n    "#########",\n    "#S......#",\n    "#######.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#G#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 17: forks galore\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#...#...#",\n    "###.#.#.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 18: the ladder (star nook near the start)\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#....*#.#",\n    "#######.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 19: the deep drop (star at the bottom of the wrong turn)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G....#*#",\n    "#########",\n  },\n  { -- 20: the super one\n    "#########",\n    "#S#.....#",\n    "#.#.###.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#...#.###",\n    "#.###.#.#",\n    "#.#.....#",\n    "#.#.#.#.#",\n    "#.#.#*#.#",\n    "#...#.#G#",\n    "#########",\n  },\n}\n\nlocal CONFETTI = { 8, 9, 10, 11, 12, 14 }\n\nlocal MOVE_SPEED = 5      -- cells per second while sliding\nlocal BUMP_TIME = 0.3     -- seconds for a wall bounce wiggle\nlocal WIN_TIME = 1.5      -- seconds of happy wiggle before next level\nlocal ALLDONE_TIME = 4.5  -- the big "you did all 20!" party\n\nlocal level               -- 1-based, keeps counting past #LEVELS (super loop)\nlocal superLoop = false   -- past the first 20: SUPER MAZE (walked backwards)\nlocal grid                -- grid[y][x] == true means wall\nlocal cols, rows\nlocal cell, ox, oy        -- cell size in px + maze origin on canvas\nlocal px, py              -- critter cell position\nlocal goalX, goalY\nlocal starX, starY        -- nil when the level has no bonus star\nlocal starGot = false\nlocal starsTotal = 0      -- persisted count of bonus stars munched\nlocal allDone = false     -- persisted: finished all 20 at least once\nlocal moving              -- nil | {dx,dy,t}  slide between cells, t 0..1\nlocal bump                -- nil | {dx,dy,t}  gentle bounce off a wall\nlocal facing = { x = 1, y = 0 }\nlocal state               -- "play" | "win" | "alldone"\nlocal winT = 0\nlocal stepAlt = false\nlocal toneq = {}          -- scheduled tones: {at, freq, ms}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function loadLevel(n)\n  local def = LEVELS[((n - 1) % #LEVELS) + 1]\n  superLoop = n > #LEVELS\n  rows = #def\n  cols = #def[1]\n  grid = {}\n  starX, starY = nil, nil\n  for y = 1, rows do\n    grid[y] = {}\n    for x = 1, cols do\n      local ch = string.sub(def[y], x, x)\n      grid[y][x] = (ch == "#")\n      if ch == "S" then\n        px, py = x, y\n      elseif ch == "G" then\n        goalX, goalY = x, y\n      elseif ch == "*" then\n        starX, starY = x, y\n      end\n    end\n  end\n  if superLoop then\n    -- SUPER MAZE: start and cookie swap, so the maze walks the other way\n    px, py, goalX, goalY = goalX, goalY, px, py\n  end\n  starGot = false\n  cell = math.min(math.floor(148 / cols), math.floor(196 / rows), 22)\n  ox = math.floor((160 - cols * cell) / 2)\n  oy = 30 + math.floor((198 - rows * cell) / 2)\n  moving = nil\n  bump = nil\n  state = "play"\n  facing = { x = 1, y = 0 }\nend\n\nlocal function cellCenter(cx, cy)\n  return ox + (cx - 1) * cell + math.floor(cell / 2),\n         oy + (cy - 1) * cell + math.floor(cell / 2)\nend\n\nlocal function isWall(cx, cy)\n  if cx < 1 or cx > cols or cy < 1 or cy > rows then\n    return true\n  end\n  return grid[cy][cx]\nend\n\nlocal function tryMove(dx, dy)\n  facing = { x = dx, y = dy }\n  if isWall(px + dx, py + dy) then\n    if not bump then\n      bump = { dx = dx, dy = dy, t = 0 }\n      vupp.tone(98, 60)  -- soft low boop, never scary\n    end\n  else\n    moving = { dx = dx, dy = dy, t = 0 }\n    stepAlt = not stepAlt\n    vupp.tone(stepAlt and 294 or 330, 22, 0.15)  -- soft alternating step blip\n  end\nend\n\nlocal function levelDone()\n  -- Persist + tell the parent right away, so a hard suspend loses nothing.\n  vupp.store.set("level", level + 1)\n  vupp.emit("maze.level_done", { level = level })\n  scheduleTone(0.00, 180, 50)    -- munch,\n  scheduleTone(0.08, 150, 60)    -- munch!\n  scheduleTone(0.22, 523, 110)\n  scheduleTone(0.35, 659, 110)\n  scheduleTone(0.48, 784, 110)\n  scheduleTone(0.61, 1047, 180)\n  if ((level - 1) % #LEVELS) + 1 == #LEVELS and not allDone then\n    -- first time through all 20: the big moment\n    state = "alldone"\n    winT = ALLDONE_TIME\n    allDone = true\n    vupp.store.set("all_done", true)\n    vupp.emit("maze.all_done", { stars = starsTotal })\n    scheduleTone(0.90, 523, 90)\n    scheduleTone(1.00, 659, 90)\n    scheduleTone(1.10, 784, 90)\n    scheduleTone(1.20, 1047, 90)\n    scheduleTone(1.35, 1319, 260)\n  else\n    state = "win"\n    winT = WIN_TIME\n  end\nend\n\nfunction vupp.init()\n  level = vupp.store.get("level", 1)\n  starsTotal = vupp.store.get("stars", 0)\n  allDone = vupp.store.get("all_done", false)\n  loadLevel(level)\nend\n\nfunction vupp.update(dt)\n  pumpTones()\n\n  if state == "win" or state == "alldone" then\n    winT = winT - dt\n    if winT <= 0 then\n      level = level + 1\n      loadLevel(level)\n    end\n    return\n  end\n\n  if moving then\n    moving.t = moving.t + dt * MOVE_SPEED\n    if moving.t >= 1 then\n      px = px + moving.dx\n      py = py + moving.dy\n      moving = nil\n      if starX and not starGot and px == starX and py == starY then\n        starGot = true\n        starsTotal = starsTotal + 1\n        vupp.store.set("stars", starsTotal)\n        vupp.tone(660, 40, 0.5)      -- sparkly munch\n        scheduleTone(0.06, 880, 60)\n        scheduleTone(0.14, 1175, 80)\n      end\n      if px == goalX and py == goalY then\n        levelDone()\n      end\n    end\n    return\n  end\n\n  if bump then\n    bump.t = bump.t + dt / BUMP_TIME\n    if bump.t >= 1 then\n      bump = nil\n    end\n    return\n  end\n\n  if vupp.btn("up") then\n    tryMove(0, -1)\n  elseif vupp.btn("down") then\n    tryMove(0, 1)\n  elseif vupp.btn("left") then\n    tryMove(-1, 0)\n  elseif vupp.btn("right") then\n    tryMove(1, 0)\n  end\nend\n\nlocal function drawCookie(gfx)\n  local gx, gy = cellCenter(goalX, goalY)\n  local r = math.max(4, math.floor(cell * 0.34))\n  gfx.circle(gx, gy, r, 15, true)          -- cookie body (peach)\n  gfx.circle(gx, gy, r, 4, false)          -- crust edge\n  local c = math.max(1, math.floor(r / 4)) -- choc chips\n  gfx.circle(gx - math.floor(r / 2), gy - 1, c, 4, true)\n  gfx.circle(gx + math.floor(r / 3), gy - math.floor(r / 2), c, 4, true)\n  gfx.circle(gx + 1, gy + math.floor(r / 2), c, 4, true)\nend\n\nlocal function drawStarCookie(gfx)\n  local gx, gy = cellCenter(starX, starY)\n  local r = math.max(2, math.floor(cell * 0.2))\n  gfx.circle(gx, gy, r, 10, true)          -- gold heart of the star\n  gfx.circle(gx, gy - r - 1, 1, 10, true)  -- little points\n  gfx.circle(gx + r + 1, gy, 1, 10, true)\n  gfx.circle(gx, gy + r + 1, 1, 10, true)\n  gfx.circle(gx - r - 1, gy, 1, 10, true)\n  local tw = math.floor(vupp.time() * 4) % 2\n  gfx.rect(gx + tw, gy - 1, 1, 1, 7, true) -- twinkle\nend\n\nlocal function drawCritter(gfx)\n  local cx, cy = cellCenter(px, py)\n  if moving then\n    local step = cell * moving.t\n    cx = cx + math.floor(moving.dx * step)\n    cy = cy + math.floor(moving.dy * step)\n  elseif bump then\n    local off = math.floor(math.sin(math.min(bump.t, 1) * math.pi) * 3)\n    cx = cx + bump.dx * off\n    cy = cy + bump.dy * off\n  end\n\n  local r = math.max(5, math.floor(cell * 0.38))\n  local happy = (state == "win" or state == "alldone")\n  if happy then\n    -- happy wiggle: bounce + tilt sparkle\n    cy = cy - math.floor(math.abs(math.sin(vupp.time() * 10)) * 4)\n    local a = vupp.time() * 6\n    gfx.circle(cx + math.floor(math.cos(a) * (r + 6)),\n               cy + math.floor(math.sin(a) * (r + 6)), 1, 10, true)\n    gfx.circle(cx - math.floor(math.cos(a) * (r + 6)),\n               cy - math.floor(math.sin(a) * (r + 6)), 1, 7, true)\n  end\n\n  -- feet\n  gfx.circle(cx - math.floor(r / 2), cy + r - 1, 2, 9, true)\n  gfx.circle(cx + math.floor(r / 2), cy + r - 1, 2, 9, true)\n  -- round yellow body\n  gfx.circle(cx, cy, r, 10, true)\n  gfx.circle(cx, cy, r, 9, false)\n  -- cheeks\n  local ex = math.max(2, math.floor(r * 0.35))\n  gfx.circle(cx - ex - 1, cy + 2, 1, 14, true)\n  gfx.circle(cx + ex + 1, cy + 2, 1, 14, true)\n  -- eyes look where the critter walks\n  local lx = cx - ex + facing.x\n  local rx = cx + ex + facing.x\n  local ey = cy - math.floor(r * 0.25) + facing.y\n  gfx.circle(lx, ey, 2, 7, true)\n  gfx.circle(rx, ey, 2, 7, true)\n  gfx.circle(lx + facing.x, ey + facing.y, 1, 0, true)\n  gfx.circle(rx + facing.x, ey + facing.y, 1, 0, true)\n  -- mouth: little smile, big open smile when winning\n  if happy then\n    gfx.circle(cx, cy + math.floor(r * 0.35), 2, 8, true)\n  else\n    gfx.line(cx - 1, cy + math.floor(r * 0.4), cx + 1, cy + math.floor(r * 0.4), 4)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- progress pips across the top: done, current, upcoming (20 tiny dots)\n  local cur = ((level - 1) % #LEVELS) + 1\n  local n = #LEVELS\n  local startX = math.floor(80 - (n * 7) / 2) + 4\n  for i = 1, n do\n    local x = startX + (i - 1) * 7\n    if i < cur then\n      gfx.circle(x, 12, 2, 10, true)\n    elseif i == cur then\n      gfx.circle(x, 12, 3, 7, false)\n      gfx.circle(x, 12, 1, 10, true)\n    else\n      gfx.circle(x, 12, 2, 13, false)\n    end\n  end\n  -- tiny label for grown-ups only\n  gfx.text(tostring(level), 4, 6, 6)\n\n  -- SUPER MAZE badge on the harder loop\n  if superLoop then\n    gfx.circle(56, 24, 3, 10, true)\n    gfx.circle(56, 20, 1, 10, true)\n    gfx.circle(60, 24, 1, 10, true)\n    gfx.circle(52, 24, 1, 10, true)\n    gfx.text("super maze", 64, 20, 14)\n  end\n\n  -- maze floor + walls (SUPER MAZE gets its own wall colors)\n  local wallBody = superLoop and 2 or 3\n  local wallTop = superLoop and 14 or 11\n  gfx.rect(ox, oy, cols * cell, rows * cell, 0, true)\n  for y = 1, rows do\n    for x = 1, cols do\n      if grid[y][x] then\n        local wx = ox + (x - 1) * cell\n        local wy = oy + (y - 1) * cell\n        gfx.rect(wx, wy, cell, cell, wallBody, true)\n        gfx.rect(wx, wy, cell, 2, wallTop, true)\n      end\n    end\n  end\n\n  drawCookie(gfx)\n  if starX and not starGot then\n    drawStarCookie(gfx)\n  end\n  drawCritter(gfx)\n\n  -- bonus star count, tucked small at the bottom\n  if starsTotal > 0 then\n    gfx.circle(8, 232, 3, 10, true)\n    gfx.circle(8, 228, 1, 10, true)\n    gfx.text(tostring(starsTotal), 16, 228, 6)\n  end\n\n  -- the big first-time-through celebration\n  if state == "alldone" then\n    gfx.rect(12, 100, 136, 24, 7, true)\n    gfx.rect(12, 100, 136, 24, 10, false)\n    gfx.text("you did all 20!", 20, 106, 8, 2)\n    local a = vupp.time() * 5\n    for i = 0, 5 do\n      local sx = 80 + math.floor(math.cos(a + i) * (30 + i * 8))\n      local sy = 112 + math.floor(math.sin(a + i) * (24 + i * 4))\n      gfx.circle(sx, sy, 1, CONFETTI[i + 1], true)\n    end\n  end\nend\n'
+        "app.json": '{\n  "slug": "maze",\n  "title": "Maze",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "game",\n  "fps": 30,\n  "capabilities": [],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The maze level your kid will play next (after 20 the SUPER MAZE loop begins)"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found tucked away off the maze paths"\n            },\n            "all_done": {\n              "type": "boolean",\n              "description": "True once your kid has finished all 20 mazes at least once"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How far your kid has gotten in the maze, plus bonus stars found"\n      }\n    },\n    "commands": {},\n    "events": {\n      "maze.level_done": {\n        "description": "Your kid guided the critter all the way through a maze",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The level that was just finished"\n            }\n          }\n        }\n      },\n      "maze.all_done": {\n        "description": "Your kid finished all 20 mazes - the SUPER MAZE loop is unlocked!",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found so far"\n            }\n          }\n        }\n      }\n    }\n  }\n}\n',
+        "main.lua": '-- luacheck: globals vupp\n-- Maze: walk a little round critter through a maze to the cookie.\n-- D-pad only, no timer, no lives; walls just gently bounce.\n-- v1.1: 20 hand-authored mazes, bonus star cookies tucked off the path,\n-- soft step blips + a munch at the cookie, a big "you did all 20!" moment,\n-- and a labeled SUPER MAZE loop afterwards (same mazes, walked backwards,\n-- new wall colors) instead of a silent recycle.\n-- Native 480x320 canvas (engine v14, hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- The hand-authored (mostly tall) level grids are transposed at load so the\n-- mazes run wide \u2014 same walls, same paths, same solvability.\n\n-- Level data: "#" wall, "." floor, "S" start, "G" goal (cookie),\n-- "*" bonus star cookie (off the direct path).\n-- All levels validated solvable; after 20 they loop as SUPER MAZE\n-- (start and cookie swap places, so every maze walks the other way).\nlocal LEVELS = {\n  { -- 1: one bend\n    "#####",\n    "#S..#",\n    "###.#",\n    "#G..#",\n    "#####",\n  },\n  { -- 2: a couple of turns\n    "#######",\n    "#S....#",\n    "#####.#",\n    "#..#..#",\n    "#..#.##",\n    "#G...##",\n    "#######",\n  },\n  { -- 3: serpentine\n    "#######",\n    "#S#...#",\n    "#.#.#.#",\n    "#...#.#",\n    "###.#.#",\n    "#...#.#",\n    "#.###.#",\n    "#....G#",\n    "#######",\n  },\n  { -- 4: first dead end (with a bonus star in it)\n    "########",\n    "#S...#G#",\n    "####.#.#",\n    "#....#.#",\n    "#.####.#",\n    "#......#",\n    "#.####.#",\n    "#.*#...#",\n    "########",\n  },\n  { -- 5: wide breather with forks\n    "#########",\n    "#...#..G#",\n    "#.#.#.###",\n    "#S#...###",\n    "#########",\n  },\n  { -- 6: taller winder (star on the bottom lane)\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#...*...#",\n    "#########",\n  },\n  { -- 7: long way around\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 8: spiral\n    "#########",\n    "#.......#",\n    "#.#####.#",\n    "#.#G..#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#S#...#.#",\n    "#.###.#.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 9: forks everywhere\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#G#",\n    "#.....#.#",\n    "#####...#",\n    "#########",\n  },\n  { -- 10: the big one\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#.....#",\n    "#.#.#####",\n    "#...#..G#",\n    "#.####.##",\n    "#......##",\n    "#########",\n  },\n  { -- 11: side pocket with a star\n    "#########",\n    "#S..#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 12: the decoy web (star deep inside it)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#*#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 13: tall twin combs\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 14: two towers (star on the high shelf)\n    "#########",\n    "#S..#..*#",\n    "#.#.#.###",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#..G#",\n    "#########",\n  },\n  { -- 15: down and around\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 16: the long spiral\n    "#########",\n    "#S......#",\n    "#######.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#G#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 17: forks galore\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#...#...#",\n    "###.#.#.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 18: the ladder (star nook near the start)\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#....*#.#",\n    "#######.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 19: the deep drop (star at the bottom of the wrong turn)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G....#*#",\n    "#########",\n  },\n  { -- 20: the super one\n    "#########",\n    "#S#.....#",\n    "#.#.###.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#...#.###",\n    "#.###.#.#",\n    "#.#.....#",\n    "#.#.#.#.#",\n    "#.#.#*#.#",\n    "#...#.#G#",\n    "#########",\n  },\n}\n\nlocal CONFETTI = { 8, 9, 10, 11, 12, 14 }\n\nlocal MOVE_SPEED = 5      -- cells per second while sliding\nlocal BUMP_TIME = 0.3     -- seconds for a wall bounce wiggle\nlocal WIN_TIME = 1.5      -- seconds of happy wiggle before next level\nlocal ALLDONE_TIME = 4.5  -- the big "you did all 20!" party\n\nlocal level               -- 1-based, keeps counting past #LEVELS (super loop)\nlocal superLoop = false   -- past the first 20: SUPER MAZE (walked backwards)\nlocal grid                -- grid[y][x] == true means wall\nlocal cols, rows\nlocal cell, ox, oy        -- cell size in px + maze origin on canvas\nlocal px, py              -- critter cell position\nlocal goalX, goalY\nlocal starX, starY        -- nil when the level has no bonus star\nlocal starGot = false\nlocal starsTotal = 0      -- persisted count of bonus stars munched\nlocal allDone = false     -- persisted: finished all 20 at least once\nlocal moving              -- nil | {dx,dy,t}  slide between cells, t 0..1\nlocal bump                -- nil | {dx,dy,t}  gentle bounce off a wall\nlocal facing = { x = 1, y = 0 }\nlocal state               -- "play" | "win" | "alldone"\nlocal winT = 0\nlocal stepAlt = false\nlocal toneq = {}          -- scheduled tones: {at, freq, ms}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function loadLevel(n)\n  local def = LEVELS[((n - 1) % #LEVELS) + 1]\n  superLoop = n > #LEVELS\n  -- transpose the authored grid: def line x, char y -> landscape cell (x, y)\n  rows = #def[1]\n  cols = #def\n  grid = {}\n  starX, starY = nil, nil\n  for y = 1, rows do\n    grid[y] = {}\n    for x = 1, cols do\n      local ch = string.sub(def[x], y, y)\n      grid[y][x] = (ch == "#")\n      if ch == "S" then\n        px, py = x, y\n      elseif ch == "G" then\n        goalX, goalY = x, y\n      elseif ch == "*" then\n        starX, starY = x, y\n      end\n    end\n  end\n  if superLoop then\n    -- SUPER MAZE: start and cookie swap, so the maze walks the other way\n    px, py, goalX, goalY = goalX, goalY, px, py\n  end\n  starGot = false\n  cell = math.min(math.floor(464 / cols), math.floor(256 / rows), 44)\n  ox = math.floor((480 - cols * cell) / 2)\n  oy = 36 + math.floor((256 - rows * cell) / 2)\n  moving = nil\n  bump = nil\n  state = "play"\n  facing = { x = 1, y = 0 }\nend\n\nlocal function cellCenter(cx, cy)\n  return ox + (cx - 1) * cell + math.floor(cell / 2),\n         oy + (cy - 1) * cell + math.floor(cell / 2)\nend\n\nlocal function isWall(cx, cy)\n  if cx < 1 or cx > cols or cy < 1 or cy > rows then\n    return true\n  end\n  return grid[cy][cx]\nend\n\nlocal function tryMove(dx, dy)\n  facing = { x = dx, y = dy }\n  if isWall(px + dx, py + dy) then\n    if not bump then\n      bump = { dx = dx, dy = dy, t = 0 }\n      vupp.tone(98, 60)  -- soft low boop, never scary\n    end\n  else\n    moving = { dx = dx, dy = dy, t = 0 }\n    stepAlt = not stepAlt\n    vupp.tone(stepAlt and 294 or 330, 22, 0.15)  -- soft alternating step blip\n  end\nend\n\nlocal function levelDone()\n  -- Persist + tell the parent right away, so a hard suspend loses nothing.\n  vupp.store.set("level", level + 1)\n  vupp.emit("maze.level_done", { level = level })\n  scheduleTone(0.00, 180, 50)    -- munch,\n  scheduleTone(0.08, 150, 60)    -- munch!\n  scheduleTone(0.22, 523, 110)\n  scheduleTone(0.35, 659, 110)\n  scheduleTone(0.48, 784, 110)\n  scheduleTone(0.61, 1047, 180)\n  if ((level - 1) % #LEVELS) + 1 == #LEVELS and not allDone then\n    -- first time through all 20: the big moment\n    state = "alldone"\n    winT = ALLDONE_TIME\n    allDone = true\n    vupp.store.set("all_done", true)\n    vupp.emit("maze.all_done", { stars = starsTotal })\n    scheduleTone(0.90, 523, 90)\n    scheduleTone(1.00, 659, 90)\n    scheduleTone(1.10, 784, 90)\n    scheduleTone(1.20, 1047, 90)\n    scheduleTone(1.35, 1319, 260)\n  else\n    state = "win"\n    winT = WIN_TIME\n  end\nend\n\nfunction vupp.init()\n  level = vupp.store.get("level", 1)\n  starsTotal = vupp.store.get("stars", 0)\n  allDone = vupp.store.get("all_done", false)\n  loadLevel(level)\nend\n\nfunction vupp.update(dt)\n  pumpTones()\n\n  if state == "win" or state == "alldone" then\n    winT = winT - dt\n    if winT <= 0 then\n      level = level + 1\n      loadLevel(level)\n    end\n    return\n  end\n\n  if moving then\n    moving.t = moving.t + dt * MOVE_SPEED\n    if moving.t >= 1 then\n      px = px + moving.dx\n      py = py + moving.dy\n      moving = nil\n      if starX and not starGot and px == starX and py == starY then\n        starGot = true\n        starsTotal = starsTotal + 1\n        vupp.store.set("stars", starsTotal)\n        vupp.tone(660, 40, 0.5)      -- sparkly munch\n        scheduleTone(0.06, 880, 60)\n        scheduleTone(0.14, 1175, 80)\n      end\n      if px == goalX and py == goalY then\n        levelDone()\n      end\n    end\n    return\n  end\n\n  if bump then\n    bump.t = bump.t + dt / BUMP_TIME\n    if bump.t >= 1 then\n      bump = nil\n    end\n    return\n  end\n\n  if vupp.btn("up") then\n    tryMove(0, -1)\n  elseif vupp.btn("down") then\n    tryMove(0, 1)\n  elseif vupp.btn("left") then\n    tryMove(-1, 0)\n  elseif vupp.btn("right") then\n    tryMove(1, 0)\n  end\nend\n\nlocal function drawCookie(gfx)\n  local gx, gy = cellCenter(goalX, goalY)\n  local r = math.max(8, math.floor(cell * 0.34))\n  gfx.circle(gx, gy, r, 15, true)          -- cookie body (peach)\n  gfx.circle(gx, gy, r, 4, false)          -- crust edge\n  local c = math.max(2, math.floor(r / 4)) -- choc chips\n  gfx.circle(gx - math.floor(r / 2), gy - 2, c, 4, true)\n  gfx.circle(gx + math.floor(r / 3), gy - math.floor(r / 2), c, 4, true)\n  gfx.circle(gx + 2, gy + math.floor(r / 2), c, 4, true)\nend\n\nlocal function drawStarCookie(gfx)\n  local gx, gy = cellCenter(starX, starY)\n  local r = math.max(4, math.floor(cell * 0.2))\n  gfx.circle(gx, gy, r, 10, true)          -- gold heart of the star\n  gfx.circle(gx, gy - r - 2, 2, 10, true)  -- little points\n  gfx.circle(gx + r + 2, gy, 2, 10, true)\n  gfx.circle(gx, gy + r + 2, 2, 10, true)\n  gfx.circle(gx - r - 2, gy, 2, 10, true)\n  local tw = (math.floor(vupp.time() * 4) % 2) * 2\n  gfx.rect(gx + tw, gy - 2, 2, 2, 7, true) -- twinkle\nend\n\nlocal function drawCritter(gfx)\n  local cx, cy = cellCenter(px, py)\n  if moving then\n    local step = cell * moving.t\n    cx = cx + math.floor(moving.dx * step)\n    cy = cy + math.floor(moving.dy * step)\n  elseif bump then\n    local off = math.floor(math.sin(math.min(bump.t, 1) * math.pi) * 6)\n    cx = cx + bump.dx * off\n    cy = cy + bump.dy * off\n  end\n\n  local r = math.max(10, math.floor(cell * 0.38))\n  local happy = (state == "win" or state == "alldone")\n  if happy then\n    -- happy wiggle: bounce + tilt sparkle\n    cy = cy - math.floor(math.abs(math.sin(vupp.time() * 10)) * 8)\n    local a = vupp.time() * 6\n    gfx.circle(cx + math.floor(math.cos(a) * (r + 12)),\n               cy + math.floor(math.sin(a) * (r + 12)), 2, 10, true)\n    gfx.circle(cx - math.floor(math.cos(a) * (r + 12)),\n               cy - math.floor(math.sin(a) * (r + 12)), 2, 7, true)\n  end\n\n  -- feet\n  gfx.circle(cx - math.floor(r / 2), cy + r - 2, 4, 9, true)\n  gfx.circle(cx + math.floor(r / 2), cy + r - 2, 4, 9, true)\n  -- round yellow body\n  gfx.circle(cx, cy, r, 10, true)\n  gfx.circle(cx, cy, r, 9, false)\n  -- cheeks\n  local ex = math.max(4, math.floor(r * 0.35))\n  gfx.circle(cx - ex - 2, cy + 4, 2, 14, true)\n  gfx.circle(cx + ex + 2, cy + 4, 2, 14, true)\n  -- eyes look where the critter walks\n  local lx = cx - ex + facing.x * 2\n  local rx = cx + ex + facing.x * 2\n  local ey = cy - math.floor(r * 0.25) + facing.y * 2\n  gfx.circle(lx, ey, 4, 7, true)\n  gfx.circle(rx, ey, 4, 7, true)\n  gfx.circle(lx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  gfx.circle(rx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  -- mouth: little smile, big open smile when winning\n  if happy then\n    gfx.circle(cx, cy + math.floor(r * 0.35), 4, 8, true)\n  else\n    gfx.line(cx - 2, cy + math.floor(r * 0.4), cx + 2, cy + math.floor(r * 0.4), 4)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- progress pips across the top: done, current, upcoming (20 tiny dots)\n  local cur = ((level - 1) % #LEVELS) + 1\n  local n = #LEVELS\n  local startX = math.floor(240 - (n * 14) / 2) + 8\n  for i = 1, n do\n    local x = startX + (i - 1) * 14\n    if i < cur then\n      gfx.circle(x, 18, 4, 10, true)\n    elseif i == cur then\n      gfx.circle(x, 18, 6, 7, false)\n      gfx.circle(x, 18, 2, 10, true)\n    else\n      gfx.circle(x, 18, 4, 13, false)\n    end\n  end\n  -- tiny label for grown-ups only\n  gfx.text(tostring(level), 8, 12, 6, 2)\n\n  -- SUPER MAZE badge on the harder loop, in the bottom-right strip\n  if superLoop then\n    gfx.circle(320, 304, 6, 10, true)\n    gfx.circle(320, 296, 2, 10, true)\n    gfx.circle(328, 304, 2, 10, true)\n    gfx.circle(312, 304, 2, 10, true)\n    gfx.text("super maze", 340, 296, 14, 2)\n  end\n\n  -- maze floor + walls (SUPER MAZE gets its own wall colors)\n  local wallBody = superLoop and 2 or 3\n  local wallTop = superLoop and 14 or 11\n  gfx.rect(ox, oy, cols * cell, rows * cell, 0, true)\n  for y = 1, rows do\n    for x = 1, cols do\n      if grid[y][x] then\n        local wx = ox + (x - 1) * cell\n        local wy = oy + (y - 1) * cell\n        gfx.rect(wx, wy, cell, cell, wallBody, true)\n        gfx.rect(wx, wy, cell, 4, wallTop, true)\n      end\n    end\n  end\n\n  drawCookie(gfx)\n  if starX and not starGot then\n    drawStarCookie(gfx)\n  end\n  drawCritter(gfx)\n\n  -- bonus star count, tucked small in the bottom-left strip\n  if starsTotal > 0 then\n    gfx.circle(16, 304, 6, 10, true)\n    gfx.circle(16, 296, 2, 10, true)\n    gfx.text(tostring(starsTotal), 32, 296, 6, 2)\n  end\n\n  -- the big first-time-through celebration\n  if state == "alldone" then\n    gfx.rect(104, 136, 272, 48, 7, true)\n    gfx.rect(104, 136, 272, 48, 10, false)\n    gfx.text("you did all 20!", 150, 151, 8, 3)\n    local a = vupp.time() * 5\n    for i = 0, 5 do\n      local sx = 240 + math.floor(math.cos(a + i) * (60 + i * 16))\n      local sy = 160 + math.floor(math.sin(a + i) * (48 + i * 8))\n      gfx.circle(sx, sy, 2, CONFETTI[i + 1], true)\n    end\n  end\nend\n'
       }
     },
     {
@@ -2717,14 +2770,15 @@ end
         "app.json": `{
   "slug": "music-maker",
   "title": "Music Maker",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "music",
   "fps": 30,
   "capabilities": [
     "touch"
   ],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -2825,15 +2879,16 @@ end
 -- Music Maker: a big touchable xylophone, one octave of C major.
 -- Tap bars (or slide a finger across them) to play; d-pad left/right moves a
 -- bouncing highlight and A plays it. Tap the face (or d-pad up/down) to switch
--- voice: Piano, Chipmunk, Bear, Robot, and a noise Drum. The chevron under the
--- play button (or B) shifts everything up an octave.
+-- voice: Piano, Chipmunk, Bear, Robot, and a noise Drum. The chevron beside
+-- the play button (or B) shifts everything up an octave.
 -- The red dot records a tune with timing; the green triangle replays it with
 -- the bars lighting up. The last tune survives relaunch in vupp.store and
 -- syncs to the parent app as a 'tune' document.
 -- The star cycles teach mode: 4 built-in songs where the next bar glows with a
 -- bouncing star and the song advances as the kid hits it \u2014 icons only, no
 -- reading. Wrong notes still play (no fail states).
--- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).
+-- Canvas 480x320 (native hires, engine v14), default PICO-8 palette
+-- (docs/07-app-library.md).
 
 local FREQS = { 262, 294, 330, 349, 392, 440, 494, 523 }  -- C4..C5
 local BAR_COLORS = { 8, 9, 10, 11, 12, 13, 2, 14 }        -- low..high, rainbow
@@ -2854,8 +2909,9 @@ local SONGS = {
 }
 local FANFARE = { 523, 659, 784, 1047, 1319 }
 
-local BAR_TOP = 50     -- bars fill y 50..234; face + buttons live above
-local BAR_STEP = 23    -- row pitch (22 tall + 1 gap)
+local BAR_TOP = 92     -- bar columns fill y 92..316; face + buttons live above
+local BAR_X0 = 12      -- leftmost column edge
+local BAR_STEP = 58    -- column pitch (52 wide + 6 gap)
 local REC_MAX = 64     -- recorded-tune cap (encoded tune stays tiny in the store)
 local TICK = 0.05      -- recording time resolution, seconds
 
@@ -2884,12 +2940,12 @@ local celebT = 0
 local fanfareI, fanfareT = 0, 0
 local songsDone = {}   -- per-song completion counts (persisted)
 
--- note n=1 (low C) is the widest bar at the bottom, like a real xylophone
+-- note n=1 (low C) is the tallest bar at the left, like a real xylophone
 local function barRect(n)
-  local w = 150 - (n - 1) * 8
-  local x = math.floor((160 - w) / 2)
-  local y = BAR_TOP + (8 - n) * BAR_STEP
-  return x, y, w, 22
+  local h = 220 - (n - 1) * 16
+  local x = BAR_X0 + (n - 1) * BAR_STEP
+  local y = 316 - h
+  return x, y, 52, h
 end
 
 local function noteFreq(base, v, o)
@@ -3077,22 +3133,20 @@ function vupp.update(dt)
   local touch = vupp.touch()
   if touch then
     if touch.y >= BAR_TOP then
-      local row = math.floor((touch.y - BAR_TOP) / BAR_STEP)
-      local n = math.max(1, math.min(8, 8 - row))
+      local col = math.floor((touch.x - BAR_X0) / BAR_STEP)
+      local n = math.max(1, math.min(8, col + 1))
       if not touchWasDown or n ~= lastTouchNote then
         playNote(n)
       end
       lastTouchNote = n
     elseif not touchWasDown then
-      -- top strip: star | face | rec, play (chevron below = octave)
-      if touch.x < 36 then
+      -- top strip: star | face | rec, play, octave chevron
+      if touch.x < 96 then
         cycleTeach()
-      elseif touch.x >= 104 then
-        if touch.y < 34 then
-          if touch.x < 134 then toggleRec() else togglePlay() end
-        elseif touch.x >= 134 then
-          toggleOct()
-        end
+      elseif touch.x >= 320 then
+        if touch.x < 372 then toggleRec()
+        elseif touch.x < 424 then togglePlay()
+        else toggleOct() end
       else
         switchInstrument()
       end
@@ -3143,102 +3197,102 @@ local function drawStar(gfx, cx, cy, s, col)
 end
 
 local function drawFace(gfx)
-  local cx, cy = 80, 25
-  local r = 16 + math.floor(faceAnim * 3)
+  local cx, cy = 240, 44
+  local r = 32 + math.floor(faceAnim * 6)
   if inst == 1 then
     -- Piano: sunny round face
     gfx.circle(cx, cy, r, 10, true)
     gfx.circle(cx, cy, r, 9, false)
-    gfx.circle(cx - 6, cy - 3, 2, 0, true)
-    gfx.circle(cx + 6, cy - 3, 2, 0, true)
-    gfx.line(cx - 6, cy + 5, cx - 3, cy + 8, 0)
-    gfx.line(cx - 3, cy + 8, cx + 3, cy + 8, 0)
-    gfx.line(cx + 3, cy + 8, cx + 6, cy + 5, 0)
+    gfx.circle(cx - 12, cy - 6, 4, 0, true)
+    gfx.circle(cx + 12, cy - 6, 4, 0, true)
+    gfx.line(cx - 12, cy + 10, cx - 6, cy + 16, 0)
+    gfx.line(cx - 6, cy + 16, cx + 6, cy + 16, 0)
+    gfx.line(cx + 6, cy + 16, cx + 12, cy + 10, 0)
   elseif inst == 2 then
     -- Chipmunk: little ears, big teeth
-    gfx.circle(cx - 10, cy - 12, 5, 4, true)
-    gfx.circle(cx + 10, cy - 12, 5, 4, true)
+    gfx.circle(cx - 20, cy - 24, 10, 4, true)
+    gfx.circle(cx + 20, cy - 24, 10, 4, true)
     gfx.circle(cx, cy, r, 15, true)
     gfx.circle(cx, cy, r, 4, false)
-    gfx.circle(cx - 6, cy - 3, 2, 0, true)
-    gfx.circle(cx + 6, cy - 3, 2, 0, true)
-    gfx.circle(cx - 9, cy + 3, 2, 14, true)
-    gfx.circle(cx + 9, cy + 3, 2, 14, true)
-    gfx.rect(cx - 4, cy + 5, 4, 6, 7, true)
-    gfx.rect(cx + 1, cy + 5, 4, 6, 7, true)
-    gfx.line(cx, cy + 5, cx, cy + 10, 6)
+    gfx.circle(cx - 12, cy - 6, 4, 0, true)
+    gfx.circle(cx + 12, cy - 6, 4, 0, true)
+    gfx.circle(cx - 18, cy + 6, 4, 14, true)
+    gfx.circle(cx + 18, cy + 6, 4, 14, true)
+    gfx.rect(cx - 8, cy + 10, 8, 12, 7, true)
+    gfx.rect(cx + 2, cy + 10, 8, 12, 7, true)
+    gfx.line(cx, cy + 10, cx, cy + 20, 6)
   elseif inst == 3 then
     -- Bear: round ears, big muzzle
-    gfx.circle(cx - 11, cy - 11, 6, 4, true)
-    gfx.circle(cx + 11, cy - 11, 6, 4, true)
-    gfx.circle(cx - 11, cy - 11, 3, 15, true)
-    gfx.circle(cx + 11, cy - 11, 3, 15, true)
+    gfx.circle(cx - 22, cy - 22, 12, 4, true)
+    gfx.circle(cx + 22, cy - 22, 12, 4, true)
+    gfx.circle(cx - 22, cy - 22, 6, 15, true)
+    gfx.circle(cx + 22, cy - 22, 6, 15, true)
     gfx.circle(cx, cy, r, 4, true)
-    gfx.circle(cx - 6, cy - 4, 2, 0, true)
-    gfx.circle(cx + 6, cy - 4, 2, 0, true)
-    gfx.circle(cx, cy + 6, 7, 15, true)
-    gfx.circle(cx, cy + 4, 2, 0, true)
-    gfx.line(cx - 2, cy + 9, cx + 2, cy + 9, 4)
+    gfx.circle(cx - 12, cy - 8, 4, 0, true)
+    gfx.circle(cx + 12, cy - 8, 4, 0, true)
+    gfx.circle(cx, cy + 12, 14, 15, true)
+    gfx.circle(cx, cy + 8, 4, 0, true)
+    gfx.line(cx - 4, cy + 18, cx + 4, cy + 18, 4)
   elseif inst == 4 then
     -- Robot: boxy head, antenna, glowy square eyes
-    local g = math.floor(faceAnim * 2)
-    gfx.circle(cx, cy - 15, 2, 8, true)
-    gfx.line(cx, cy - 13, cx, cy - 10, 5)
-    gfx.rect(cx - 13 - g, cy - 10 - g, 26 + g * 2, 24 + g * 2, 6, true)
-    gfx.rect(cx - 13 - g, cy - 10 - g, 26 + g * 2, 24 + g * 2, 5, false)
-    gfx.rect(cx - 9, cy - 5, 6, 6, 12, true)
-    gfx.rect(cx + 3, cy - 5, 6, 6, 12, true)
-    gfx.rect(cx - 6, cy + 6, 12, 4, 0, true)
-    gfx.line(cx - 2, cy + 6, cx - 2, cy + 9, 6)
-    gfx.line(cx + 2, cy + 6, cx + 2, cy + 9, 6)
+    local g = math.floor(faceAnim * 4)
+    gfx.circle(cx, cy - 30, 4, 8, true)
+    gfx.line(cx, cy - 26, cx, cy - 20, 5)
+    gfx.rect(cx - 26 - g, cy - 20 - g, 52 + g * 2, 48 + g * 2, 6, true)
+    gfx.rect(cx - 26 - g, cy - 20 - g, 52 + g * 2, 48 + g * 2, 5, false)
+    gfx.rect(cx - 18, cy - 10, 12, 12, 12, true)
+    gfx.rect(cx + 6, cy - 10, 12, 12, 12, true)
+    gfx.rect(cx - 12, cy + 12, 24, 8, 0, true)
+    gfx.line(cx - 4, cy + 12, cx - 4, cy + 18, 6)
+    gfx.line(cx + 4, cy + 12, cx + 4, cy + 18, 6)
   else
     -- Drum: smiling drum with crossed sticks
-    gfx.line(cx - 18, cy - 14, cx - 5, cy - 6, 4)
-    gfx.line(cx + 18, cy - 14, cx + 5, cy - 6, 4)
-    gfx.circle(cx - 18, cy - 14, 2, 15, true)
-    gfx.circle(cx + 18, cy - 14, 2, 15, true)
-    gfx.rect(cx - 14, cy - 6, 28, 17, 8, true)
-    gfx.rect(cx - 14, cy - 6, 28, 17, 2, false)
-    gfx.rect(cx - 14, cy - 9, 28, 5, 15, true)
-    gfx.rect(cx - 14, cy - 9, 28, 5, 4, false)
-    gfx.circle(cx - 6, cy + 2, 2, 0, true)
-    gfx.circle(cx + 6, cy + 2, 2, 0, true)
-    gfx.line(cx - 4, cy + 7, cx, cy + 9, 0)
-    gfx.line(cx, cy + 9, cx + 4, cy + 7, 0)
+    gfx.line(cx - 36, cy - 28, cx - 10, cy - 12, 4)
+    gfx.line(cx + 36, cy - 28, cx + 10, cy - 12, 4)
+    gfx.circle(cx - 36, cy - 28, 4, 15, true)
+    gfx.circle(cx + 36, cy - 28, 4, 15, true)
+    gfx.rect(cx - 28, cy - 12, 56, 34, 8, true)
+    gfx.rect(cx - 28, cy - 12, 56, 34, 2, false)
+    gfx.rect(cx - 28, cy - 18, 56, 10, 15, true)
+    gfx.rect(cx - 28, cy - 18, 56, 10, 4, false)
+    gfx.circle(cx - 12, cy + 4, 4, 0, true)
+    gfx.circle(cx + 12, cy + 4, 4, 0, true)
+    gfx.line(cx - 8, cy + 14, cx, cy + 18, 0)
+    gfx.line(cx, cy + 18, cx + 8, cy + 14, 0)
   end
   -- which-instrument dots
   for i = 1, #INSTRUMENTS do
-    local dx = 80 + (i - 3) * 8
-    gfx.circle(dx, 46, 1, i == inst and 7 or 5, true)
+    local dx = 240 + (i - 3) * 16
+    gfx.circle(dx, 84, 2, i == inst and 7 or 5, true)
   end
 end
 
 local function drawButtons(gfx)
   -- teach star + one pip per song
-  drawStar(gfx, 16, 20, 10, teachSong > 0 and 10 or 5)
-  if teachSong > 0 then drawStar(gfx, 16, 20, 5, 7) end
+  drawStar(gfx, 32, 40, 20, teachSong > 0 and 10 or 5)
+  if teachSong > 0 then drawStar(gfx, 32, 40, 10, 7) end
   for i = 1, #SONGS do
-    gfx.circle(6 + i * 5, 38, 1, i == teachSong and 7 or 13, true)
+    gfx.circle(12 + i * 10, 76, 2, i == teachSong and 7 or 13, true)
   end
   -- record
-  local rr = recOn and (9 + math.floor(math.sin(t * 8) * 2)) or 9
-  gfx.circle(122, 20, rr, recOn and 8 or 2, true)
-  gfx.circle(122, 20, rr, recOn and 7 or 5, false)
-  if not recOn then gfx.circle(122, 20, 4, 8, true) end
+  local rr = recOn and (18 + math.floor(math.sin(t * 8) * 4)) or 18
+  gfx.circle(344, 44, rr, recOn and 8 or 2, true)
+  gfx.circle(344, 44, rr, recOn and 7 or 5, false)
+  if not recOn then gfx.circle(344, 44, 8, 8, true) end
   -- play / stop
-  gfx.circle(146, 20, 9, 2, true)
-  gfx.circle(146, 20, 9, playOn and 11 or 5, false)
+  gfx.circle(396, 44, 18, 2, true)
+  gfx.circle(396, 44, 18, playOn and 11 or 5, false)
   if playOn then
-    gfx.rect(142, 16, 8, 8, 11, true)
+    gfx.rect(388, 36, 16, 16, 11, true)
   else
-    gfx.tri(143, 14, 143, 26, 152, 20, evCount > 0 and 11 or 5)
+    gfx.tri(390, 32, 390, 56, 408, 44, evCount > 0 and 11 or 5)
   end
   -- octave chevron (bright when shifted up)
   local oc = oct == 1 and 10 or 5
-  gfx.line(139, 45, 146, 38, oc)
-  gfx.line(146, 38, 153, 45, oc)
-  gfx.line(139, 46, 146, 39, oc)
-  gfx.line(146, 39, 153, 46, oc)
+  gfx.line(438, 54, 452, 40, oc)
+  gfx.line(452, 40, 466, 54, oc)
+  gfx.line(438, 56, 452, 42, oc)
+  gfx.line(452, 42, 466, 56, oc)
 end
 
 function vupp.draw(gfx)
@@ -3248,14 +3302,14 @@ function vupp.draw(gfx)
 
   for n = 1, 8 do
     local x, y, w, h = barRect(n)
-    local grow = math.floor(anim[n] * 5)
-    gfx.rect(x - grow, y, w + grow * 2, h, BAR_COLORS[n], true)
+    local grow = math.floor(anim[n] * 10)
+    gfx.rect(x - grow, y - grow * 2, w + grow * 2, h + grow * 2, BAR_COLORS[n], true)
     if anim[n] > 0.4 then
-      gfx.rect(x - grow, y, w + grow * 2, h, 7, false)
+      gfx.rect(x - grow, y - grow * 2, w + grow * 2, h + grow * 2, 7, false)
     else
       -- two "nail" dots so the bars read as a xylophone
-      gfx.circle(x + 6, y + math.floor(h / 2), 1, 7, true)
-      gfx.circle(x + w - 7, y + math.floor(h / 2), 1, 7, true)
+      gfx.circle(x + math.floor(w / 2), y + 14, 2, 7, true)
+      gfx.circle(x + math.floor(w / 2), y + h - 16, 2, 7, true)
     end
   end
 
@@ -3264,26 +3318,26 @@ function vupp.draw(gfx)
     local target = string.byte(SONGS[teachSong].notes, teachPos) - 48
     local x, y, w, h = barRect(target)
     local gc = math.floor(t * 6) % 2 == 0 and 7 or 10
-    gfx.rect(x - 2, y - 1, w + 4, h + 2, gc, false)
-    gfx.rect(x - 3, y - 2, w + 6, h + 4, gc, false)
-    local bob = math.floor(math.sin(t * 6) * 2)
-    drawStar(gfx, x + 14, y + 11 + bob, 5, 10)
+    gfx.rect(x - 4, y - 2, w + 8, h + 4, gc, false)
+    gfx.rect(x - 6, y - 4, w + 12, h + 8, gc, false)
+    local bob = math.floor(math.sin(t * 6) * 4)
+    drawStar(gfx, x + 26, y + 28 + bob, 10, 10)
   end
 
   -- bouncing highlight around the selected bar (for d-pad play)
   local x, y, w, h = barRect(sel)
-  local bob = math.floor(math.sin(t * 5) * 1.5)
-  gfx.rect(x - 3, y - 2 + bob, w + 6, h + 4, 7, false)
-  gfx.rect(x - 4, y - 3 + bob, w + 8, h + 6, 6, false)
+  local bob = math.floor(math.sin(t * 5) * 3)
+  gfx.rect(x - 6, y - 4 + bob, w + 12, h + 8, 7, false)
+  gfx.rect(x - 8, y - 6 + bob, w + 16, h + 12, 6, false)
 
   -- song-done confetti rain
   if celebT > 0 then
-    local fall = (2 - celebT) * 90
+    local fall = (2 - celebT) * 120
     for i = 1, 14 do
-      local px = 6 + (i * 37) % 148
-      local py = (i * 61) % 60 + math.floor(fall * (0.7 + (i % 3) * 0.25))
-      if py < 240 then
-        gfx.rect(px, py, 3, 3, BAR_COLORS[i % 8 + 1], true)
+      local px = 12 + ((i * 37) % 228) * 2
+      local py = (i * 122) % 80 + math.floor(fall * (0.7 + (i % 3) * 0.25))
+      if py < 320 then
+        gfx.rect(px, py, 6, 6, BAR_COLORS[i % 8 + 1], true)
       end
     end
   end
@@ -3299,8 +3353,8 @@ end
       palette: 16,
       lines: 411,
       files: {
-        "app.json": '{\n  "slug": "ripple",\n  "title": "Ripple",\n  "version": "1.0.0",\n  "author": "Vupp",\n  "category": "creative",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 7,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "Total quiet time your kid has spent in Ripple"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Rings rippled across the pond, ever"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles gently popped, ever"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated up into the night sky, ever"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much winding-down time your kid has spent in Ripple"\n      }\n    },\n    "commands": {},\n    "events": {\n      "calm.quiet_time": {\n        "description": "Your kid spent some quiet time in Ripple settling down",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "How long this quiet sit lasted"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Pond rings made this time"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles popped this time"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated this time"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#0c1120",\n    "#14263d",\n    "#46375e",\n    "#175048",\n    "#6b5a45",\n    "#3d4d60",\n    "#8ba3b5",\n    "#e8f2f5",\n    "#d6907f",\n    "#d6a869",\n    "#ead9a0",\n    "#78bd9d",\n    "#6da8d6",\n    "#9b8fbd",\n    "#d6a8bd",\n    "#a8c2c6"\n  ]\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Ripple: a quiet sensory toy \u2014 three little scenes, no goals, no score, no\n-- timer, no end. Pond: touch the water and perfectly predictable rings spread\n-- from your finger with a soft descending note (same spot, same sound, every\n-- time). Pop: a grid of soft bubbles to press \u2014 each row hums its own\n-- pentatonic note, and an empty grid quietly refills itself. Sky: hold a\n-- finger anywhere and little stars stream up and drift away. Nothing moves\n-- fast, nothing appears suddenly, nothing ever fails. B cycles scenes (or tap\n-- the three dots at the bottom); d-pad moves a gentle cursor and A does what\n-- a finger would, so every path works without touch. Canvas 160x240, custom\n-- low-arousal pond/dusk palette (see app.json).\n\nlocal t = 0\nlocal scene = 1              -- 1 pond, 2 pop, 3 sky\nlocal touchWasDown = false\nlocal dpadActive = false\nlocal cx, cy = 80, 120       -- d-pad cursor (pond + sky)\nlocal saveTick = 0\n\n-- lifetime counters (loaded in init, saved on exit and every ~30 s)\nlocal ripplesEver, popsEver, starsEver, secondsEver = 0, 0, 0, 0\nlocal nRip, nPop, nStar = 0, 0, 0   -- this session\n\n-- pond ----------------------------------------------------------------------\nlocal ripples = {}           -- {x, y, r, age}\nlocal lastRipX, lastRipY, lastRipT = -99, -99, -99\nlocal lastToneT = -99\nlocal aHold = 0\n\n-- pop -----------------------------------------------------------------------\nlocal COLS, ROWS = 4, 5\nlocal CELL = 36\nlocal GX, GY = 8, 22\nlocal ROW_NOTES = { 523, 440, 392, 330, 262 }  -- top row highest, pentatonic\nlocal pop = {}               -- [i] = {popped, age}\nlocal sparkles = {}          -- {x, y, dx, dy, age}\nlocal refillWait = 0         -- pause after the last pop before refilling\nlocal refillI = 0            -- >0 while bubbles grow back one by one\nlocal refillTick = 0\nlocal sel = { r = 3, c = 2 }\n\n-- sky -----------------------------------------------------------------------\nlocal STARS = {\n  { 12, 18, 0.0 }, { 44, 9, 1.1 }, { 76, 22, 2.3 }, { 108, 12, 3.1 },\n  { 146, 26, 4.2 }, { 22, 52, 5.0 }, { 58, 44, 0.7 }, { 96, 56, 1.9 },\n  { 138, 62, 2.8 }, { 10, 92, 3.7 }, { 70, 84, 4.6 }, { 118, 96, 5.5 },\n  { 34, 128, 0.4 }, { 88, 136, 1.5 }, { 150, 122, 2.1 }, { 52, 168, 3.4 },\n  { 124, 176, 4.9 }, { 16, 200, 5.8 },\n}\nlocal stars = {}             -- {x0, y, vy, ph, age}\nlocal starTick = 0\nlocal airT = 0\n\nlocal function clamp(v, lo, hi)\n  if v < lo then return lo end\n  if v > hi then return hi end\n  return v\nend\n\nlocal function initPop()\n  for i = 1, COLS * ROWS do\n    pop[i] = { popped = false, age = 1 }\n  end\nend\n\nfunction vupp.init()\n  ripplesEver = vupp.store.get("ripples", 0)\n  popsEver = vupp.store.get("pops", 0)\n  starsEver = vupp.store.get("stars", 0)\n  secondsEver = vupp.store.get("seconds", 0)\n  initPop()\nend\n\nlocal function saveCounters()\n  vupp.store.set("ripples", ripplesEver + nRip)\n  vupp.store.set("pops", popsEver + nPop)\n  vupp.store.set("stars", starsEver + nStar)\n  vupp.store.set("seconds", secondsEver + math.floor(vupp.time()))\nend\n\nfunction vupp.on_exit()\n  saveCounters()\n  if vupp.time() >= 15 then\n    vupp.emit("calm.quiet_time", {\n      seconds = math.floor(vupp.time()),\n      ripples = nRip, pops = nPop, stars = nStar,\n    })\n  end\nend\n\n-- pond ----------------------------------------------------------------------\n\nlocal function spawnRipple(x, y)\n  if #ripples >= 24 then table.remove(ripples, 1) end\n  ripples[#ripples + 1] = { x = x, y = y, r = 2, age = 0 }\n  nRip = nRip + 1\n  lastRipX, lastRipY, lastRipT = x, y, t\n  if t - lastToneT > 0.1 then\n    -- same height, same note \u2014 the sound is as predictable as the rings\n    local freq = 300 + (240 - y) * 1.8\n    vupp.tone(freq, 600, 0.2, "sine")\n    lastToneT = t\n  end\nend\n\nlocal function pondTouch(x, y, newPress)\n  local dx, dy = x - lastRipX, y - lastRipY\n  local far = dx * dx + dy * dy > 16 * 16\n  if newPress or far or t - lastRipT > 0.28 then\n    spawnRipple(x, y)\n  end\nend\n\nlocal function updatePond(dt, touch, newPress)\n  if touch and touch.y < 222 then\n    dpadActive = false\n    pondTouch(touch.x, touch.y, newPress)\n  end\n  if vupp.btnp("a") then\n    dpadActive = true\n    spawnRipple(cx, cy)\n    aHold = 0\n  elseif vupp.btn("a") then\n    aHold = aHold + dt\n    if aHold > 0.3 then\n      spawnRipple(cx, cy)\n      aHold = 0\n    end\n  end\n  local i = 1\n  while i <= #ripples do\n    local rp = ripples[i]\n    rp.r = rp.r + 26 * dt\n    rp.age = rp.age + dt\n    if rp.age > 2.4 then table.remove(ripples, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPond(gfx)\n  gfx.clear(3)\n  -- still-water specks, fixed forever\n  for _, p in ipairs({ { 30, 60 }, { 120, 44 }, { 64, 150 }, { 140, 190 }, { 18, 118 } }) do\n    gfx.rect(p[1], p[2], 1, 1, 5, true)\n  end\n  -- two lily pads, always in the same corner of the pond\n  gfx.circle(30, 36, 12, 11, true)\n  gfx.circle(38, 30, 5, 3, true)\n  gfx.circle(132, 204, 10, 11, true)\n  gfx.circle(126, 210, 4, 3, true)\n  -- the koi drifts one slow fixed loop \u2014 never startles, never hides\n  local kx = 80 + 52 * math.sin(t * 0.11)\n  local ky = 105 + 58 * math.sin(t * 0.083 + 1.9)\n  local dir = (math.cos(t * 0.11) >= 0) and 1 or -1\n  local sway = math.sin(t * 2.2) * 2\n  gfx.circle(math.floor(kx - dir * 11), math.floor(ky + sway), 2, 8, true)\n  gfx.circle(math.floor(kx - dir * 8), math.floor(ky + sway * 0.5), 3, 8, true)\n  gfx.circle(math.floor(kx), math.floor(ky), 7, 8, true)\n  gfx.circle(math.floor(kx + dir * 2), math.floor(ky - 2), 3, 9, true)\n  gfx.circle(math.floor(kx + dir * 4), math.floor(ky + 1), 1, 0, true)\n  for _, rp in ipairs(ripples) do\n    local rr = math.floor(rp.r)\n    local col = 7\n    if rp.age > 1.6 then col = 5 elseif rp.age > 0.8 then col = 12 end\n    gfx.circle(math.floor(rp.x), math.floor(rp.y), rr, col, false)\n    if rr > 8 then\n      gfx.circle(math.floor(rp.x), math.floor(rp.y), rr - 6, 5, false)\n    end\n  end\nend\n\n-- pop -----------------------------------------------------------------------\n\nlocal function cellCenter(r, c)\n  return GX + (c - 1) * CELL + CELL / 2, GY + (r - 1) * CELL + CELL / 2\nend\n\nlocal function popAt(r, c)\n  local i = (r - 1) * COLS + c\n  local b = pop[i]\n  if b.popped or refillI > 0 then return end\n  b.popped = true\n  b.age = 0\n  nPop = nPop + 1\n  vupp.tone(ROW_NOTES[r], 140, 0.3, "sine")\n  local x, y = cellCenter(r, c)\n  for k = 1, 4 do\n    local a = k * 1.57 + 0.6\n    sparkles[#sparkles + 1] = {\n      x = x, y = y, dx = math.cos(a) * 34, dy = math.sin(a) * 34, age = 0,\n    }\n  end\n  for k = 1, COLS * ROWS do\n    if not pop[k].popped then return end\n  end\n  refillWait = 1.1   -- grid is empty: a calm beat, then it quietly comes back\nend\n\nlocal function updatePop(dt, touch)\n  if touch and touch.y < GY + ROWS * CELL then\n    dpadActive = false\n    local c = math.floor((touch.x - GX) / CELL) + 1\n    local r = math.floor((touch.y - GY) / CELL) + 1\n    if r >= 1 and r <= ROWS and c >= 1 and c <= COLS then\n      local x, y = cellCenter(r, c)\n      local dx, dy = touch.x - x, touch.y - y\n      if dx * dx + dy * dy <= 17 * 17 then popAt(r, c) end\n    end\n  end\n  if vupp.btnp("left") then sel.c = clamp(sel.c - 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("right") then sel.c = clamp(sel.c + 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("up") then sel.r = clamp(sel.r - 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("down") then sel.r = clamp(sel.r + 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("a") then\n    dpadActive = true\n    popAt(sel.r, sel.c)\n  end\n  for _, b in ipairs(pop) do\n    b.age = b.age + dt\n  end\n  if refillWait > 0 then\n    refillWait = refillWait - dt\n    if refillWait <= 0 then\n      refillI = 1\n      refillTick = 0\n    end\n  end\n  if refillI > 0 then\n    refillTick = refillTick - dt\n    if refillTick <= 0 then\n      pop[refillI] = { popped = false, age = 0 }\n      refillI = refillI + 1\n      refillTick = 0.15\n      if refillI > COLS * ROWS then refillI = 0 end\n    end\n  end\n  local i = 1\n  while i <= #sparkles do\n    local s = sparkles[i]\n    s.x = s.x + s.dx * dt\n    s.y = s.y + s.dy * dt\n    s.age = s.age + dt\n    if s.age > 0.4 then table.remove(sparkles, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPop(gfx)\n  gfx.clear(1)\n  for r = 1, ROWS do\n    for c = 1, COLS do\n      local b = pop[(r - 1) * COLS + c]\n      local x, y = cellCenter(r, c)\n      x, y = math.floor(x), math.floor(y)\n      if b.popped then\n        if b.age < 0.25 then\n          gfx.circle(x, y, math.floor(14 + b.age * 40), 7, false)\n        else\n          gfx.circle(x, y, 3, 5, false)\n        end\n      else\n        local rr = 14\n        if b.age < 0.3 then rr = math.max(1, math.floor(14 * b.age / 0.3)) end\n        gfx.circle(x, y, rr, 2, true)\n        gfx.circle(x, y, rr, 12, false)\n        if rr > 8 then gfx.circle(x - 5, y - 5, 2, 15, true) end\n      end\n    end\n  end\n  if dpadActive then\n    local x, y = cellCenter(sel.r, sel.c)\n    gfx.circle(math.floor(x), math.floor(y), 17, 10, false)\n  end\n  for _, s in ipairs(sparkles) do\n    gfx.circle(math.floor(s.x), math.floor(s.y), 1, 10, true)\n  end\nend\n\n-- sky -----------------------------------------------------------------------\n\nlocal function updateSky(dt, touch)\n  local hx, hy = nil, nil\n  if touch and touch.y < 222 then\n    dpadActive = false\n    hx, hy = touch.x, touch.y\n  elseif vupp.btn("a") then\n    dpadActive = true\n    hx, hy = cx, cy\n  end\n  if hx then\n    starTick = starTick - dt\n    if starTick <= 0 then\n      if #stars >= 60 then table.remove(stars, 1) end\n      stars[#stars + 1] = {\n        x0 = hx + vupp.rand(9) - 5, y = hy, vy = -18 - vupp.rand(10),\n        ph = vupp.rand(628) / 100, age = 0,\n      }\n      nStar = nStar + 1\n      starTick = 0.08\n    end\n    airT = airT - dt\n    if airT <= 0 then\n      vupp.tone(880, 700, 0.08, "sine")\n      airT = 0.9\n    end\n  else\n    airT = 0\n  end\n  local i = 1\n  while i <= #stars do\n    local s = stars[i]\n    s.y = s.y + s.vy * dt\n    s.age = s.age + dt\n    if s.age > 3 or s.y < -4 then table.remove(stars, i) else i = i + 1 end\n  end\nend\n\nlocal function drawSky(gfx)\n  gfx.clear(0)\n  -- a soft crescent moon, always in its spot\n  gfx.circle(128, 34, 12, 6, true)\n  gfx.circle(133, 30, 11, 0, true)\n  for i, st in ipairs(STARS) do\n    local b = math.sin(t * 0.7 + st[3])\n    local col = 5\n    if b > 0.4 then col = 7 elseif b > -0.3 then col = 6 end\n    if i % 4 == 0 then\n      gfx.circle(st[1], st[2], 1, col, true)\n    else\n      gfx.rect(st[1], st[2], 1, 1, col, true)\n    end\n  end\n  for _, s in ipairs(stars) do\n    local x = math.floor(s.x0 + math.sin(t * 2 + s.ph) * 4)\n    local y = math.floor(s.y)\n    local col = 13\n    if s.age < 1 then col = 7 elseif s.age < 2 then col = 10 end\n    gfx.circle(x, y, 1, col, true)\n    if s.age < 0.5 then gfx.circle(x, y, 2, col, false) end\n  end\nend\n\n-- shared --------------------------------------------------------------------\n\nlocal function switchScene(n)\n  if n ~= scene then\n    scene = n\n    vupp.tone(494, 70, 0.12, "sine")\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  local touch = vupp.touch()\n  local newPress = touch ~= nil and not touchWasDown\n  -- the three dots: tap to switch scene (B cycles for d-pad hands)\n  if newPress and touch.y >= 222 then\n    if touch.x < 74 then switchScene(1)\n    elseif touch.x < 86 then switchScene(2)\n    else switchScene(3) end\n    touchWasDown = true\n    return\n  end\n  if vupp.btnp("b") then\n    switchScene(scene % 3 + 1)\n  end\n  -- d-pad cursor glides in pond and sky (pop moves cell by cell)\n  if scene ~= 2 then\n    local spd = 110 * dt\n    if vupp.btn("left") then cx = cx - spd; dpadActive = true end\n    if vupp.btn("right") then cx = cx + spd; dpadActive = true end\n    if vupp.btn("up") then cy = cy - spd; dpadActive = true end\n    if vupp.btn("down") then cy = cy + spd; dpadActive = true end\n    cx = clamp(cx, 8, 152)\n    cy = clamp(cy, 8, 214)\n  end\n  if scene == 1 then\n    updatePond(dt, touch, newPress)\n  elseif scene == 2 then\n    updatePop(dt, touch)\n  else\n    updateSky(dt, touch)\n  end\n  touchWasDown = touch ~= nil\n  saveTick = saveTick + dt\n  if saveTick > 30 then\n    saveCounters()   -- hard-exit safe\n    saveTick = 0\n  end\nend\n\nfunction vupp.draw(gfx)\n  if scene == 1 then\n    drawPond(gfx)\n  elseif scene == 2 then\n    drawPop(gfx)\n  else\n    drawSky(gfx)\n  end\n  if dpadActive and scene ~= 2 then\n    gfx.circle(math.floor(cx), math.floor(cy), 5, 10, false)\n    gfx.rect(math.floor(cx), math.floor(cy), 1, 1, 10, true)\n  end\n  for i = 1, 3 do\n    local x = 56 + i * 12\n    if i == scene then\n      gfx.circle(x, 231, 3, 10, true)\n    else\n      gfx.circle(x, 231, 3, 5, false)\n    end\n  end\nend\n'
+        "app.json": '{\n  "slug": "ripple",\n  "title": "Ripple",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "creative",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "Total quiet time your kid has spent in Ripple"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Rings rippled across the pond, ever"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles gently popped, ever"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated up into the night sky, ever"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much winding-down time your kid has spent in Ripple"\n      }\n    },\n    "commands": {},\n    "events": {\n      "calm.quiet_time": {\n        "description": "Your kid spent some quiet time in Ripple settling down",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "How long this quiet sit lasted"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Pond rings made this time"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles popped this time"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated this time"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#0c1120",\n    "#14263d",\n    "#46375e",\n    "#175048",\n    "#6b5a45",\n    "#3d4d60",\n    "#8ba3b5",\n    "#e8f2f5",\n    "#d6907f",\n    "#d6a869",\n    "#ead9a0",\n    "#78bd9d",\n    "#6da8d6",\n    "#9b8fbd",\n    "#d6a8bd",\n    "#a8c2c6"\n  ]\n}\n',
+        "main.lua": '-- luacheck: globals vupp\n-- Ripple: a quiet sensory toy \u2014 three little scenes, no goals, no score, no\n-- timer, no end. Pond: touch the water and perfectly predictable rings spread\n-- from your finger with a soft descending note (same spot, same sound, every\n-- time). Pop: a grid of soft bubbles to press \u2014 each column hums its own\n-- pentatonic note, and an empty grid quietly refills itself. Sky: hold a\n-- finger anywhere and little stars stream up and drift away. Nothing moves\n-- fast, nothing appears suddenly, nothing ever fails. B cycles scenes (or tap\n-- the three dots at the bottom); d-pad moves a gentle cursor and A does what\n-- a finger would, so every path works without touch. Canvas 480x320 (native\n-- hires, engine v14), custom low-arousal pond/dusk palette (see app.json).\n\nlocal t = 0\nlocal scene = 1              -- 1 pond, 2 pop, 3 sky\nlocal touchWasDown = false\nlocal dpadActive = false\nlocal cx, cy = 240, 160      -- d-pad cursor (pond + sky)\nlocal saveTick = 0\n\n-- lifetime counters (loaded in init, saved on exit and every ~30 s)\nlocal ripplesEver, popsEver, starsEver, secondsEver = 0, 0, 0, 0\nlocal nRip, nPop, nStar = 0, 0, 0   -- this session\n\n-- pond ----------------------------------------------------------------------\nlocal ripples = {}           -- {x, y, r, age}\nlocal lastRipX, lastRipY, lastRipT = -99, -99, -99\nlocal lastToneT = -99\nlocal aHold = 0\n\n-- pop -----------------------------------------------------------------------\nlocal COLS, ROWS = 5, 3\nlocal CELL = 72\nlocal GX, GY = 60, 28\nlocal COL_NOTES = { 262, 330, 392, 440, 523 }  -- left column lowest, pentatonic\nlocal pop = {}               -- [i] = {popped, age}\nlocal sparkles = {}          -- {x, y, dx, dy, age}\nlocal refillWait = 0         -- pause after the last pop before refilling\nlocal refillI = 0            -- >0 while bubbles grow back one by one\nlocal refillTick = 0\nlocal sel = { r = 2, c = 3 }\n\n-- sky -----------------------------------------------------------------------\nlocal STARS = {\n  { 36, 24, 0.0 }, { 132, 12, 1.1 }, { 228, 30, 2.3 }, { 324, 16, 3.1 },\n  { 438, 34, 4.2 }, { 66, 70, 5.0 }, { 174, 58, 0.7 }, { 288, 74, 1.9 },\n  { 414, 82, 2.8 }, { 30, 122, 3.7 }, { 210, 112, 4.6 }, { 354, 128, 5.5 },\n  { 102, 170, 0.4 }, { 264, 182, 1.5 }, { 450, 162, 2.1 }, { 156, 224, 3.4 },\n  { 372, 234, 4.9 }, { 48, 266, 5.8 },\n}\nlocal stars = {}             -- {x0, y, vy, ph, age}\nlocal starTick = 0\nlocal airT = 0\n\nlocal function clamp(v, lo, hi)\n  if v < lo then return lo end\n  if v > hi then return hi end\n  return v\nend\n\nlocal function initPop()\n  for i = 1, COLS * ROWS do\n    pop[i] = { popped = false, age = 1 }\n  end\nend\n\nfunction vupp.init()\n  ripplesEver = vupp.store.get("ripples", 0)\n  popsEver = vupp.store.get("pops", 0)\n  starsEver = vupp.store.get("stars", 0)\n  secondsEver = vupp.store.get("seconds", 0)\n  initPop()\nend\n\nlocal function saveCounters()\n  vupp.store.set("ripples", ripplesEver + nRip)\n  vupp.store.set("pops", popsEver + nPop)\n  vupp.store.set("stars", starsEver + nStar)\n  vupp.store.set("seconds", secondsEver + math.floor(vupp.time()))\nend\n\nfunction vupp.on_exit()\n  saveCounters()\n  if vupp.time() >= 15 then\n    vupp.emit("calm.quiet_time", {\n      seconds = math.floor(vupp.time()),\n      ripples = nRip, pops = nPop, stars = nStar,\n    })\n  end\nend\n\n-- pond ----------------------------------------------------------------------\n\nlocal function spawnRipple(x, y)\n  if #ripples >= 24 then table.remove(ripples, 1) end\n  ripples[#ripples + 1] = { x = x, y = y, r = 4, age = 0 }\n  nRip = nRip + 1\n  lastRipX, lastRipY, lastRipT = x, y, t\n  if t - lastToneT > 0.1 then\n    -- same height, same note \u2014 the sound is as predictable as the rings\n    local freq = 300 + (320 - y) * 1.35\n    vupp.tone(freq, 600, 0.2, "sine")\n    lastToneT = t\n  end\nend\n\nlocal function pondTouch(x, y, newPress)\n  local dx, dy = x - lastRipX, y - lastRipY\n  local far = dx * dx + dy * dy > 32 * 32\n  if newPress or far or t - lastRipT > 0.28 then\n    spawnRipple(x, y)\n  end\nend\n\nlocal function updatePond(dt, touch, newPress)\n  if touch and touch.y < 284 then\n    dpadActive = false\n    pondTouch(touch.x, touch.y, newPress)\n  end\n  if vupp.btnp("a") then\n    dpadActive = true\n    spawnRipple(cx, cy)\n    aHold = 0\n  elseif vupp.btn("a") then\n    aHold = aHold + dt\n    if aHold > 0.3 then\n      spawnRipple(cx, cy)\n      aHold = 0\n    end\n  end\n  local i = 1\n  while i <= #ripples do\n    local rp = ripples[i]\n    rp.r = rp.r + 52 * dt\n    rp.age = rp.age + dt\n    if rp.age > 2.4 then table.remove(ripples, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPond(gfx)\n  gfx.clear(3)\n  -- still-water specks, fixed forever\n  for _, p in ipairs({ { 90, 80 }, { 360, 58 }, { 192, 200 }, { 420, 254 }, { 54, 158 } }) do\n    gfx.rect(p[1], p[2], 2, 2, 5, true)\n  end\n  -- two lily pads, always in the same corner of the pond\n  gfx.circle(68, 56, 24, 11, true)\n  gfx.circle(84, 44, 10, 3, true)\n  gfx.circle(412, 256, 20, 11, true)\n  gfx.circle(400, 268, 8, 3, true)\n  -- the koi drifts one slow fixed loop \u2014 never startles, never hides\n  local kx = 240 + 168 * math.sin(t * 0.11)\n  local ky = 140 + 80 * math.sin(t * 0.083 + 1.9)\n  local dir = (math.cos(t * 0.11) >= 0) and 1 or -1\n  local sway = math.sin(t * 2.2) * 4\n  gfx.circle(math.floor(kx - dir * 22), math.floor(ky + sway), 4, 8, true)\n  gfx.circle(math.floor(kx - dir * 16), math.floor(ky + sway * 0.5), 6, 8, true)\n  gfx.circle(math.floor(kx), math.floor(ky), 14, 8, true)\n  gfx.circle(math.floor(kx + dir * 4), math.floor(ky - 4), 6, 9, true)\n  gfx.circle(math.floor(kx + dir * 8), math.floor(ky + 2), 2, 0, true)\n  for _, rp in ipairs(ripples) do\n    local rr = math.floor(rp.r)\n    local col = 7\n    if rp.age > 1.6 then col = 5 elseif rp.age > 0.8 then col = 12 end\n    gfx.circle(math.floor(rp.x), math.floor(rp.y), rr, col, false)\n    if rr > 16 then\n      gfx.circle(math.floor(rp.x), math.floor(rp.y), rr - 12, 5, false)\n    end\n  end\nend\n\n-- pop -----------------------------------------------------------------------\n\nlocal function cellCenter(r, c)\n  return GX + (c - 1) * CELL + CELL / 2, GY + (r - 1) * CELL + CELL / 2\nend\n\nlocal function popAt(r, c)\n  local i = (r - 1) * COLS + c\n  local b = pop[i]\n  if b.popped or refillI > 0 then return end\n  b.popped = true\n  b.age = 0\n  nPop = nPop + 1\n  vupp.tone(COL_NOTES[c], 140, 0.3, "sine")\n  local x, y = cellCenter(r, c)\n  for k = 1, 4 do\n    local a = k * 1.57 + 0.6\n    sparkles[#sparkles + 1] = {\n      x = x, y = y, dx = math.cos(a) * 68, dy = math.sin(a) * 68, age = 0,\n    }\n  end\n  for k = 1, COLS * ROWS do\n    if not pop[k].popped then return end\n  end\n  refillWait = 1.1   -- grid is empty: a calm beat, then it quietly comes back\nend\n\nlocal function updatePop(dt, touch)\n  if touch and touch.y < GY + ROWS * CELL then\n    dpadActive = false\n    local c = math.floor((touch.x - GX) / CELL) + 1\n    local r = math.floor((touch.y - GY) / CELL) + 1\n    if r >= 1 and r <= ROWS and c >= 1 and c <= COLS then\n      local x, y = cellCenter(r, c)\n      local dx, dy = touch.x - x, touch.y - y\n      if dx * dx + dy * dy <= 34 * 34 then popAt(r, c) end\n    end\n  end\n  if vupp.btnp("left") then sel.c = clamp(sel.c - 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("right") then sel.c = clamp(sel.c + 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("up") then sel.r = clamp(sel.r - 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("down") then sel.r = clamp(sel.r + 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("a") then\n    dpadActive = true\n    popAt(sel.r, sel.c)\n  end\n  for _, b in ipairs(pop) do\n    b.age = b.age + dt\n  end\n  if refillWait > 0 then\n    refillWait = refillWait - dt\n    if refillWait <= 0 then\n      refillI = 1\n      refillTick = 0\n    end\n  end\n  if refillI > 0 then\n    refillTick = refillTick - dt\n    if refillTick <= 0 then\n      pop[refillI] = { popped = false, age = 0 }\n      refillI = refillI + 1\n      refillTick = 0.15\n      if refillI > COLS * ROWS then refillI = 0 end\n    end\n  end\n  local i = 1\n  while i <= #sparkles do\n    local s = sparkles[i]\n    s.x = s.x + s.dx * dt\n    s.y = s.y + s.dy * dt\n    s.age = s.age + dt\n    if s.age > 0.4 then table.remove(sparkles, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPop(gfx)\n  gfx.clear(1)\n  for r = 1, ROWS do\n    for c = 1, COLS do\n      local b = pop[(r - 1) * COLS + c]\n      local x, y = cellCenter(r, c)\n      x, y = math.floor(x), math.floor(y)\n      if b.popped then\n        if b.age < 0.25 then\n          gfx.circle(x, y, math.floor(28 + b.age * 80), 7, false)\n        else\n          gfx.circle(x, y, 6, 5, false)\n        end\n      else\n        local rr = 28\n        if b.age < 0.3 then rr = math.max(2, math.floor(28 * b.age / 0.3)) end\n        gfx.circle(x, y, rr, 2, true)\n        gfx.circle(x, y, rr, 12, false)\n        if rr > 16 then gfx.circle(x - 10, y - 10, 4, 15, true) end\n      end\n    end\n  end\n  if dpadActive then\n    local x, y = cellCenter(sel.r, sel.c)\n    gfx.circle(math.floor(x), math.floor(y), 34, 10, false)\n  end\n  for _, s in ipairs(sparkles) do\n    gfx.circle(math.floor(s.x), math.floor(s.y), 2, 10, true)\n  end\nend\n\n-- sky -----------------------------------------------------------------------\n\nlocal function updateSky(dt, touch)\n  local hx, hy = nil, nil\n  if touch and touch.y < 284 then\n    dpadActive = false\n    hx, hy = touch.x, touch.y\n  elseif vupp.btn("a") then\n    dpadActive = true\n    hx, hy = cx, cy\n  end\n  if hx then\n    starTick = starTick - dt\n    if starTick <= 0 then\n      if #stars >= 60 then table.remove(stars, 1) end\n      stars[#stars + 1] = {\n        x0 = hx + vupp.rand(17) - 9, y = hy, vy = -36 - vupp.rand(20),\n        ph = vupp.rand(628) / 100, age = 0,\n      }\n      nStar = nStar + 1\n      starTick = 0.08\n    end\n    airT = airT - dt\n    if airT <= 0 then\n      vupp.tone(880, 700, 0.08, "sine")\n      airT = 0.9\n    end\n  else\n    airT = 0\n  end\n  local i = 1\n  while i <= #stars do\n    local s = stars[i]\n    s.y = s.y + s.vy * dt\n    s.age = s.age + dt\n    if s.age > 3 or s.y < -8 then table.remove(stars, i) else i = i + 1 end\n  end\nend\n\nlocal function drawSky(gfx)\n  gfx.clear(0)\n  -- a soft crescent moon, always in its spot\n  gfx.circle(392, 56, 24, 6, true)\n  gfx.circle(402, 48, 22, 0, true)\n  for i, st in ipairs(STARS) do\n    local b = math.sin(t * 0.7 + st[3])\n    local col = 5\n    if b > 0.4 then col = 7 elseif b > -0.3 then col = 6 end\n    if i % 4 == 0 then\n      gfx.circle(st[1], st[2], 2, col, true)\n    else\n      gfx.rect(st[1], st[2], 2, 2, col, true)\n    end\n  end\n  for _, s in ipairs(stars) do\n    local x = math.floor(s.x0 + math.sin(t * 2 + s.ph) * 8)\n    local y = math.floor(s.y)\n    local col = 13\n    if s.age < 1 then col = 7 elseif s.age < 2 then col = 10 end\n    gfx.circle(x, y, 2, col, true)\n    if s.age < 0.5 then gfx.circle(x, y, 4, col, false) end\n  end\nend\n\n-- shared --------------------------------------------------------------------\n\nlocal function switchScene(n)\n  if n ~= scene then\n    scene = n\n    vupp.tone(494, 70, 0.12, "sine")\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  local touch = vupp.touch()\n  local newPress = touch ~= nil and not touchWasDown\n  -- the three dots: tap to switch scene (B cycles for d-pad hands)\n  if newPress and touch.y >= 284 then\n    if touch.x < 228 then switchScene(1)\n    elseif touch.x < 252 then switchScene(2)\n    else switchScene(3) end\n    touchWasDown = true\n    return\n  end\n  if vupp.btnp("b") then\n    switchScene(scene % 3 + 1)\n  end\n  -- d-pad cursor glides in pond and sky (pop moves cell by cell)\n  if scene ~= 2 then\n    local spd = 220 * dt\n    if vupp.btn("left") then cx = cx - spd; dpadActive = true end\n    if vupp.btn("right") then cx = cx + spd; dpadActive = true end\n    if vupp.btn("up") then cy = cy - spd; dpadActive = true end\n    if vupp.btn("down") then cy = cy + spd; dpadActive = true end\n    cx = clamp(cx, 16, 464)\n    cy = clamp(cy, 16, 268)\n  end\n  if scene == 1 then\n    updatePond(dt, touch, newPress)\n  elseif scene == 2 then\n    updatePop(dt, touch)\n  else\n    updateSky(dt, touch)\n  end\n  touchWasDown = touch ~= nil\n  saveTick = saveTick + dt\n  if saveTick > 30 then\n    saveCounters()   -- hard-exit safe\n    saveTick = 0\n  end\nend\n\nfunction vupp.draw(gfx)\n  if scene == 1 then\n    drawPond(gfx)\n  elseif scene == 2 then\n    drawPop(gfx)\n  else\n    drawSky(gfx)\n  end\n  if dpadActive and scene ~= 2 then\n    gfx.circle(math.floor(cx), math.floor(cy), 10, 10, false)\n    gfx.rect(math.floor(cx), math.floor(cy), 2, 2, 10, true)\n  end\n  for i = 1, 3 do\n    local x = 192 + i * 24\n    if i == scene then\n      gfx.circle(x, 302, 6, 10, true)\n    else\n      gfx.circle(x, 302, 6, 5, false)\n    end\n  end\nend\n'
       }
     },
     {
@@ -3309,17 +3363,18 @@ end
       category: "game",
       summary: "tracks dash.finished, dash.all_levels",
       palette: 0,
-      lines: 632,
+      lines: 634,
       files: {
         "app.json": `{
   "slug": "runner",
   "title": "Dash",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "game",
   "fps": 30,
   "capabilities": [],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -3395,132 +3450,134 @@ end
 -- platforms), a title screen, level progress that persists, per-level ring
 -- bests, PERFECT! runs, a "you did them all!" lap celebration, and outfit
 -- colors that unlock as flag finishes add up.
--- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).
+-- v2.0: native 480x320 canvas (engine v14, hires) \u2014 all canvas-px values
+-- doubled, gameplay identical.
+-- Canvas 480x320 landscape, default PICO-8 palette (docs/07-app-library.md).
 
-local GROUND_Y = 200      -- top of the ground platforms
-local RUN_SPEED = 70
-local JUMP_V = -175
-local GRAVITY = 430
+local GROUND_Y = 260      -- top of the ground platforms
+local RUN_SPEED = 140
+local JUMP_V = -350
+local GRAVITY = 860
 local COYOTE = 0.14
 
--- Physics envelope for level authoring: jump rise ~35 px, safe gap <= 44 px
--- (with the +-4 px landing forgiveness), full-run jump carries ~57 px.
+-- Physics envelope for level authoring: jump rise ~70 px, safe gap <= 88 px
+-- (with the +-8 px landing forgiveness), full-run jump carries ~114 px.
 -- plats: {x, y, w} solids (y = walkable top). movers: {x, y, w, range, spd}
 -- oscillate x..x+range at spd rad/s and carry the runner. rings: {x, y}.
 local LEVELS = {
   { -- 1: the meadow (the original level)
-    w = 640, flag = 612,
+    w = 1280, flag = 1224,
     plats = {
-      { x = 0, y = GROUND_Y, w = 150 },
-      { x = 185, y = GROUND_Y, w = 120 },
-      { x = 340, y = GROUND_Y, w = 130 },
-      { x = 505, y = GROUND_Y, w = 135 },
-      { x = 150, y = 168, w = 40 },      -- helper over gap 1
-      { x = 230, y = 156, w = 44 },
-      { x = 300, y = 168, w = 44 },      -- helper over gap 2
-      { x = 390, y = 154, w = 44 },
-      { x = 468, y = 168, w = 40 },      -- helper over gap 3
+      { x = 0, y = GROUND_Y, w = 300 },
+      { x = 370, y = GROUND_Y, w = 240 },
+      { x = 680, y = GROUND_Y, w = 260 },
+      { x = 1010, y = GROUND_Y, w = 270 },
+      { x = 300, y = 196, w = 80 },      -- helper over gap 1
+      { x = 460, y = 172, w = 88 },
+      { x = 600, y = 196, w = 88 },      -- helper over gap 2
+      { x = 780, y = 168, w = 88 },
+      { x = 936, y = 196, w = 80 },      -- helper over gap 3
     },
     movers = {},
     rings = {
-      { x = 60, y = 184 }, { x = 90, y = 184 }, { x = 120, y = 184 },
-      { x = 170, y = 146 }, { x = 250, y = 132 }, { x = 322, y = 146 },
-      { x = 380, y = 184 }, { x = 422, y = 130 }, { x = 488, y = 148 },
-      { x = 540, y = 184 }, { x = 570, y = 184 },
+      { x = 120, y = 228 }, { x = 180, y = 228 }, { x = 240, y = 228 },
+      { x = 340, y = 152 }, { x = 500, y = 124 }, { x = 644, y = 152 },
+      { x = 760, y = 228 }, { x = 844, y = 120 }, { x = 976, y = 156 },
+      { x = 1080, y = 228 }, { x = 1140, y = 228 },
     },
   },
   { -- 2: wide meadows \u2014 the gaps stretch out, no helpers over them
-    w = 640, flag = 612,
+    w = 1280, flag = 1224,
     plats = {
-      { x = 0, y = GROUND_Y, w = 120 },
-      { x = 158, y = GROUND_Y, w = 100 },
-      { x = 298, y = GROUND_Y, w = 96 },
-      { x = 438, y = GROUND_Y, w = 202 },
-      { x = 180, y = 170, w = 40 },
-      { x = 330, y = 170, w = 40 },
+      { x = 0, y = GROUND_Y, w = 240 },
+      { x = 316, y = GROUND_Y, w = 200 },
+      { x = 596, y = GROUND_Y, w = 192 },
+      { x = 876, y = GROUND_Y, w = 404 },
+      { x = 360, y = 200, w = 80 },
+      { x = 660, y = 200, w = 80 },
     },
     movers = {},
     rings = {
-      { x = 50, y = 184 }, { x = 85, y = 184 }, { x = 198, y = 152 },
-      { x = 240, y = 184 }, { x = 348, y = 150 }, { x = 420, y = 184 },
-      { x = 470, y = 184 }, { x = 545, y = 152 }, { x = 600, y = 184 },
+      { x = 100, y = 228 }, { x = 170, y = 228 }, { x = 396, y = 164 },
+      { x = 480, y = 228 }, { x = 696, y = 160 }, { x = 840, y = 228 },
+      { x = 940, y = 228 }, { x = 1090, y = 164 }, { x = 1200, y = 228 },
     },
   },
   { -- 3: up the hills \u2014 a staircase to a high ridge and back down
-    w = 640, flag = 610,
+    w = 1280, flag = 1220,
     plats = {
-      { x = 0, y = GROUND_Y, w = 110 },
-      { x = 140, y = 172, w = 44 },
-      { x = 212, y = 146, w = 44 },
-      { x = 284, y = 120, w = 50 },
-      { x = 362, y = 146, w = 44 },
-      { x = 434, y = 174, w = 44 },
-      { x = 508, y = GROUND_Y, w = 132 },
+      { x = 0, y = GROUND_Y, w = 220 },
+      { x = 280, y = 204, w = 88 },
+      { x = 424, y = 152, w = 88 },
+      { x = 568, y = 100, w = 100 },
+      { x = 724, y = 152, w = 88 },
+      { x = 868, y = 208, w = 88 },
+      { x = 1016, y = GROUND_Y, w = 264 },
     },
     movers = {},
     rings = {
-      { x = 60, y = 184 }, { x = 162, y = 154 }, { x = 236, y = 126 },
-      { x = 300, y = 102 }, { x = 326, y = 102 }, { x = 390, y = 126 },
-      { x = 464, y = 156 }, { x = 560, y = 184 }, { x = 600, y = 184 },
+      { x = 120, y = 228 }, { x = 324, y = 168 }, { x = 472, y = 112 },
+      { x = 600, y = 64 }, { x = 652, y = 64 }, { x = 780, y = 112 },
+      { x = 928, y = 172 }, { x = 1120, y = 228 }, { x = 1200, y = 228 },
     },
   },
   { -- 4: the ferry \u2014 a moving platform carries you over the big gap
-    w = 640, flag = 612,
+    w = 1280, flag = 1224,
     plats = {
-      { x = 0, y = GROUND_Y, w = 130 },
-      { x = 270, y = GROUND_Y, w = 110 },
-      { x = 422, y = GROUND_Y, w = 80 },
-      { x = 542, y = GROUND_Y, w = 98 },
-      { x = 310, y = 170, w = 40 },
-      { x = 462, y = 170, w = 40 },      -- lifts you over the last gap too
+      { x = 0, y = GROUND_Y, w = 260 },
+      { x = 540, y = GROUND_Y, w = 220 },
+      { x = 844, y = GROUND_Y, w = 160 },
+      { x = 1084, y = GROUND_Y, w = 196 },
+      { x = 620, y = 200, w = 80 },
+      { x = 924, y = 200, w = 80 },      -- lifts you over the last gap too
     },
     movers = {
-      { x = 140, y = 180, w = 44, range = 80, spd = 0.9 },
+      { x = 280, y = 220, w = 88, range = 160, spd = 0.9 },
     },
     rings = {
-      { x = 40, y = 184 }, { x = 90, y = 184 }, { x = 170, y = 166 },
-      { x = 200, y = 166 }, { x = 235, y = 166 }, { x = 325, y = 152 },
-      { x = 360, y = 184 }, { x = 478, y = 152 }, { x = 560, y = 184 },
-      { x = 605, y = 184 },
+      { x = 80, y = 228 }, { x = 180, y = 228 }, { x = 340, y = 192 },
+      { x = 400, y = 192 }, { x = 470, y = 192 }, { x = 650, y = 164 },
+      { x = 720, y = 228 }, { x = 956, y = 164 }, { x = 1120, y = 228 },
+      { x = 1210, y = 228 },
     },
   },
   { -- 5: sky steps \u2014 high stairs onto a fast little ferry
-    w = 640, flag = 610,
+    w = 1280, flag = 1220,
     plats = {
-      { x = 0, y = GROUND_Y, w = 100 },
-      { x = 130, y = 170, w = 40 },
-      { x = 200, y = 148, w = 40 },
-      { x = 410, y = 136, w = 40 },
-      { x = 480, y = 168, w = 40 },
-      { x = 548, y = GROUND_Y, w = 92 },
+      { x = 0, y = GROUND_Y, w = 200 },
+      { x = 260, y = 200, w = 80 },
+      { x = 400, y = 156, w = 80 },
+      { x = 820, y = 132, w = 80 },
+      { x = 960, y = 196, w = 80 },
+      { x = 1096, y = GROUND_Y, w = 184 },
     },
     movers = {
-      { x = 270, y = 126, w = 40, range = 70, spd = 1.1 },
+      { x = 540, y = 112, w = 80, range = 140, spd = 1.1 },
     },
     rings = {
-      { x = 50, y = 184 }, { x = 148, y = 152 }, { x = 218, y = 120 },
-      { x = 285, y = 108 }, { x = 315, y = 108 }, { x = 345, y = 108 },
-      { x = 428, y = 120 }, { x = 498, y = 152 }, { x = 588, y = 184 },
+      { x = 100, y = 228 }, { x = 296, y = 164 }, { x = 436, y = 100 },
+      { x = 570, y = 76 }, { x = 630, y = 76 }, { x = 690, y = 76 },
+      { x = 856, y = 100 }, { x = 996, y = 164 }, { x = 1176, y = 228 },
     },
   },
   { -- 6: the grand tour \u2014 longest run: wide gap, high climb, sky ferry
-    w = 704, flag = 676,
+    w = 1408, flag = 1352,
     plats = {
-      { x = 0, y = GROUND_Y, w = 110 },
-      { x = 154, y = GROUND_Y, w = 80 },
-      { x = 264, y = 170, w = 44 },
-      { x = 338, y = 146, w = 44 },
-      { x = 572, y = 166, w = 40 },
-      { x = 602, y = GROUND_Y, w = 102 },
+      { x = 0, y = GROUND_Y, w = 220 },
+      { x = 308, y = GROUND_Y, w = 160 },
+      { x = 528, y = 200, w = 88 },
+      { x = 676, y = 152, w = 88 },
+      { x = 1144, y = 192, w = 80 },
+      { x = 1204, y = GROUND_Y, w = 204 },
     },
     movers = {
-      { x = 412, y = 132, w = 40, range = 90, spd = 0.9 },
+      { x = 824, y = 124, w = 80, range = 180, spd = 0.9 },
     },
     rings = {
-      { x = 40, y = 184 }, { x = 80, y = 184 }, { x = 190, y = 184 },
-      { x = 286, y = 150 }, { x = 360, y = 116 }, { x = 430, y = 116 },
-      { x = 470, y = 116 }, { x = 510, y = 116 }, { x = 592, y = 150 },
-      { x = 640, y = 184 }, { x = 660, y = 184 },
+      { x = 80, y = 228 }, { x = 160, y = 228 }, { x = 380, y = 228 },
+      { x = 572, y = 160 }, { x = 720, y = 92 }, { x = 860, y = 92 },
+      { x = 940, y = 92 }, { x = 1020, y = 92 }, { x = 1184, y = 160 },
+      { x = 1280, y = 228 }, { x = 1320, y = 228 },
     },
   },
 }
@@ -3529,13 +3586,13 @@ local LEVELS = {
 local OUTFIT_COLORS = { 14, 9, 12, 11, 10 }
 local CONFETTI = { 8, 9, 10, 11, 12, 14 }
 
-local CLOUDS = { { 40, 40 }, { 180, 60 }, { 330, 34 }, { 470, 56 }, { 590, 40 } }
+local CLOUDS = { { 80, 52 }, { 360, 80 }, { 660, 44 }, { 940, 74 }, { 1180, 52 } }
 
-local player = { x = 30, y = GROUND_Y, vx = 0, vy = 0 }  -- y = feet
+local player = { x = 60, y = GROUND_Y, vx = 0, vy = 0 }  -- y = feet
 local grounded = true
 local standingOn = nil    -- platform ref while grounded (movers carry us)
 local coyoteT = 0
-local safeX = 30          -- last solid footing (for gap rescues)
+local safeX = 60          -- last solid footing (for gap rescues)
 local safeY = GROUND_Y    -- ...and the platform top it was on
 local rescueT = 0         -- brief steering lockout so the drop lands home
 local level = 1
@@ -3580,8 +3637,8 @@ local function burst(x, y, n, c1, c2)
     if s.life <= 0 then
       s.x = x
       s.y = y
-      s.vx = (vupp.rand(100) - 50) * 1.6
-      s.vy = (vupp.rand(100) - 75) * 1.4
+      s.vx = (vupp.rand(100) - 50) * 3.2
+      s.vy = (vupp.rand(100) - 75) * 2.8
       s.life = 0.5 + vupp.rand(25) / 100
       s.c = (made % 2 == 0) and c1 or c2
       made = made + 1
@@ -3596,7 +3653,7 @@ local function updateSparks(dt)
       s.life = s.life - dt
       s.x = s.x + s.vx * dt
       s.y = s.y + s.vy * dt
-      s.vy = s.vy + 140 * dt
+      s.vy = s.vy + 280 * dt
     end
   end
 end
@@ -3620,13 +3677,13 @@ local function resetLevel()
     plats[#plats + 1] = { x = m.x, y = m.y, w = m.w,
                           bx = m.x, range = m.range, spd = m.spd, mv = true }
   end
-  player.x = 30
+  player.x = 60
   player.y = GROUND_Y
   player.vx = 0
   player.vy = 0
   grounded = true
   standingOn = nil
-  safeX = 30
+  safeX = 60
   safeY = GROUND_Y
   ringCount = 0
   for i = 1, #L.rings do
@@ -3642,10 +3699,10 @@ local function resetLevel()
 end
 
 local function platformUnder(px, py)
-  -- the platform whose top is at py (+-1) with px inside its span
+  -- the platform whose top is at py (+-2) with px inside its span
   for i = 1, #plats do
     local p = plats[i]
-    if px >= p.x - 4 and px <= p.x + p.w + 4 and math.abs(py - p.y) <= 1 then
+    if px >= p.x - 8 and px <= p.x + p.w + 8 and math.abs(py - p.y) <= 2 then
       return p
     end
   end
@@ -3697,7 +3754,7 @@ local function finishLevel()
   scheduleTone(0.26, 784, 110)
   scheduleTone(0.39, 1047, 200)
   if perfectRun then
-    burst(math.floor(player.x), math.floor(player.y) - 14, 12, 10, 7)
+    burst(math.floor(player.x), math.floor(player.y) - 28, 12, 10, 7)
     scheduleTone(0.60, 784, 90)      -- extra "all the rings!" fanfare
     scheduleTone(0.70, 988, 90)
     scheduleTone(0.80, 1319, 220)
@@ -3711,7 +3768,7 @@ local function finishLevel()
     scheduleTone(1.45, 1319, 260)
   end
   if finishes % 5 == 0 then          -- fresh outfit color just unlocked
-    burst(math.floor(player.x), math.floor(player.y) - 20, 8, outfitColor(), 7)
+    burst(math.floor(player.x), math.floor(player.y) - 40, 8, outfitColor(), 7)
   end
 end
 
@@ -3747,7 +3804,7 @@ function vupp.update(dt)
       fireT = fireT - dt              -- fireworks all through the party
       if fireT <= 0 then
         fireT = 0.35
-        burst(20 + vupp.rand(120), 50 + vupp.rand(70), 6,
+        burst(40 + vupp.rand(400), 60 + vupp.rand(140), 6,
               CONFETTI[vupp.rand(6)], 7)
       end
     end
@@ -3786,7 +3843,7 @@ function vupp.update(dt)
   end
 
   local W = lvl().w
-  player.x = math.max(8, math.min(W - 8, player.x + player.vx * dt))
+  player.x = math.max(16, math.min(W - 16, player.x + player.vx * dt))
 
   if grounded then
     -- walked off an edge?
@@ -3805,14 +3862,14 @@ function vupp.update(dt)
   end
   if not grounded then
     local oldY = player.y
-    player.vy = math.min(260, player.vy + GRAVITY * dt)
+    player.vy = math.min(520, player.vy + GRAVITY * dt)
     player.y = player.y + player.vy * dt
     if player.vy > 0 then
       -- forgiving landing check: crossed any platform top this frame?
       for i = 1, #plats do
         local p = plats[i]
-        if player.x >= p.x - 4 and player.x <= p.x + p.w + 4
-            and oldY <= p.y + 1 and player.y >= p.y then
+        if player.x >= p.x - 8 and player.x <= p.x + p.w + 8
+            and oldY <= p.y + 2 and player.y >= p.y then
           player.y = p.y
           player.vy = 0
           grounded = true
@@ -3824,9 +3881,9 @@ function vupp.update(dt)
   end
 
   -- fell in a gap: pop back onto the last solid footing, no drama
-  if player.y > 260 then
-    player.x = math.max(8, safeX)
-    player.y = safeY - 40
+  if player.y > 360 then
+    player.x = math.max(16, safeX)
+    player.y = safeY - 80
     player.vy = 0
     rescueT = 0.6
     scheduleTone(0.00, 200, 90)
@@ -3838,8 +3895,8 @@ function vupp.update(dt)
   for i = 1, #R do
     if ringsGot[i] then
       local dx = player.x - R[i].x
-      local dy = (player.y - 8) - R[i].y
-      if dx * dx + dy * dy < 14 * 14 then
+      local dy = (player.y - 16) - R[i].y
+      if dx * dx + dy * dy < 28 * 28 then
         ringsGot[i] = false
         ringCount = ringCount + 1
         vupp.tone(900 + ringCount * 30, 50, 0.6)
@@ -3848,38 +3905,38 @@ function vupp.update(dt)
   end
 
   -- the flag!
-  if player.x >= lvl().flag - 6 and grounded then
+  if player.x >= lvl().flag - 12 and grounded then
     finishLevel()
   end
 
-  camX = math.max(0, math.min(W - 160, player.x - 60))
+  camX = math.max(0, math.min(W - 480, player.x - 180))
 end
 
 local function drawBlob(gfx, sx, sy, bob, happy)
   local body = outfitColor()
-  gfx.rect(sx - 6, sy - 3, 5, 3, 8, true)              -- sneakers
-  gfx.rect(sx + 1, sy - 3, 5, 3, 8, true)
-  gfx.circle(sx, sy - 10 - bob, 8, body, true)         -- body
-  gfx.circle(sx, sy - 10 - bob, 8, 2, false)
-  gfx.circle(sx + 3, sy - 12 - bob, 2, 7, true)        -- eye looks ahead
-  gfx.circle(sx + 4, sy - 12 - bob, 1, 0, true)
+  gfx.rect(sx - 12, sy - 6, 10, 6, 8, true)            -- sneakers
+  gfx.rect(sx + 2, sy - 6, 10, 6, 8, true)
+  gfx.circle(sx, sy - 20 - bob, 16, body, true)        -- body
+  gfx.circle(sx, sy - 20 - bob, 16, 2, false)
+  gfx.circle(sx + 6, sy - 24 - bob, 4, 7, true)        -- eye looks ahead
+  gfx.circle(sx + 8, sy - 24 - bob, 2, 0, true)
   if happy then
-    gfx.circle(sx + 1, sy - 6 - bob, 2, 8, true)       -- open happy mouth
+    gfx.circle(sx + 2, sy - 12 - bob, 4, 8, true)      -- open happy mouth
   end
 end
 
 local function drawLevelPips(gfx)
   local n = #LEVELS
-  local startX = 80 - math.floor((n - 1) * 10 / 2)
+  local startX = 240 - math.floor((n - 1) * 20 / 2)
   for i = 1, n do
-    local x = startX + (i - 1) * 10
+    local x = startX + (i - 1) * 20
     if i < level then
-      gfx.circle(x, 12, 3, 11, true)
+      gfx.circle(x, 24, 6, 11, true)
     elseif i == level then
-      gfx.circle(x, 12, 4, 7, false)
-      gfx.circle(x, 12, 2, 10, true)
+      gfx.circle(x, 24, 8, 7, false)
+      gfx.circle(x, 24, 4, 10, true)
     else
-      gfx.circle(x, 12, 3, 13, false)
+      gfx.circle(x, 24, 6, 13, false)
     end
   end
 end
@@ -3888,42 +3945,42 @@ local function drawSparks(gfx)
   for i = 1, SPARKS_N do
     local s = sparks[i]
     if s.life > 0 then
-      gfx.rect(math.floor(s.x), math.floor(s.y), 2, 2, s.c, true)
+      gfx.rect(math.floor(s.x), math.floor(s.y), 4, 4, s.c, true)
     end
   end
 end
 
 local function drawTitle(gfx)
   gfx.clear(12)
-  gfx.circle(36, 40, 8, 7, true)
-  gfx.circle(46, 42, 6, 7, true)
-  gfx.circle(27, 42, 6, 7, true)
-  gfx.circle(120, 60, 7, 7, true)
-  gfx.circle(129, 62, 5, 7, true)
+  gfx.circle(72, 60, 16, 7, true)
+  gfx.circle(92, 64, 12, 7, true)
+  gfx.circle(54, 64, 12, 7, true)
+  gfx.circle(392, 80, 14, 7, true)
+  gfx.circle(410, 84, 10, 7, true)
 
-  gfx.text("dash", 65, 33, 4, 2)
-  gfx.text("dash", 64, 32, 7, 2)
+  gfx.text("dash", 218, 57, 4, 3)
+  gfx.text("dash", 216, 55, 7, 3)
 
   -- ground with the blob and a flag
-  gfx.rect(0, GROUND_Y, 160, 40, 4, true)
-  gfx.rect(0, GROUND_Y, 160, 5, 11, true)
-  local bob = math.floor(math.abs(math.sin(runT * 4)) * 3)
-  drawBlob(gfx, 56, GROUND_Y, bob, true)
-  gfx.rect(102, GROUND_Y - 44, 3, 44, 6, true)
-  local wave = math.floor(math.sin(runT * 6) * 2)
-  gfx.rect(105, GROUND_Y - 42, 18 + wave, 12, 8, true)
+  gfx.rect(0, GROUND_Y, 480, 60, 4, true)
+  gfx.rect(0, GROUND_Y, 480, 10, 11, true)
+  local bob = math.floor(math.abs(math.sin(runT * 4)) * 6)
+  drawBlob(gfx, 140, GROUND_Y, bob, true)
+  gfx.rect(400, GROUND_Y - 88, 6, 88, 6, true)
+  local wave = math.floor(math.sin(runT * 6) * 4)
+  gfx.rect(406, GROUND_Y - 84, 36 + wave, 24, 8, true)
 
-  -- controls: right arrow = run, A = jump (pictures first, words for parents)
-  gfx.tri(40, 96, 40, 112, 54, 104, 7)
-  gfx.text("run", 64, 100, 6)
-  local pr = 8 + math.floor(math.abs(math.sin(runT * 3)) * 2)
-  gfx.circle(47, 134, pr, 7, true)
-  gfx.circle(47, 134, pr, 6, false)
-  gfx.text("a", 44, 128, 0, 2)
-  gfx.text("jump", 64, 130, 6)
+  -- controls, side by side: right arrow = run, A = jump (words for parents)
+  gfx.tri(52, 192, 52, 224, 80, 208, 7)
+  gfx.text("run", 96, 200, 6, 2)
+  local pr = 16 + math.floor(math.abs(math.sin(runT * 3)) * 4)
+  gfx.circle(296, 208, pr, 7, true)
+  gfx.circle(296, 208, pr, 6, false)
+  gfx.text("a", 290, 199, 0, 3)
+  gfx.text("jump", 328, 200, 6, 2)
 
   drawLevelPips(gfx)
-  gfx.text("lv " .. tostring(level), 4, 6, 6)
+  gfx.text("lv " .. tostring(level), 8, 12, 6, 2)
   drawSparks(gfx)
 end
 
@@ -3939,10 +3996,10 @@ function vupp.draw(gfx)
   for i = 1, #CLOUDS do
     local cx = CLOUDS[i][1] - math.floor(camX * 0.4)
     local cy = CLOUDS[i][2]
-    if cx > -30 and cx < 190 then
-      gfx.circle(cx, cy, 8, 7, true)
-      gfx.circle(cx + 10, cy + 2, 6, 7, true)
-      gfx.circle(cx - 9, cy + 2, 6, 7, true)
+    if cx > -60 and cx < 540 then
+      gfx.circle(cx, cy, 16, 7, true)
+      gfx.circle(cx + 20, cy + 4, 12, 7, true)
+      gfx.circle(cx - 18, cy + 4, 12, 7, true)
     end
   end
 
@@ -3950,10 +4007,10 @@ function vupp.draw(gfx)
   for i = 1, #plats do
     local p = plats[i]
     local sx = math.floor(p.x - camX)
-    if sx < 160 and sx + p.w > 0 then
-      local h = (p.y == GROUND_Y) and (240 - p.y) or 12
+    if sx < 480 and sx + p.w > 0 then
+      local h = (p.y == GROUND_Y) and (320 - p.y) or 24
       gfx.rect(sx, p.y, p.w, h, 4, true)
-      gfx.rect(sx, p.y, p.w, 5, p.mv and 10 or 11, true)  -- movers look golden
+      gfx.rect(sx, p.y, p.w, 10, p.mv and 10 or 11, true)  -- movers look golden
     end
   end
 
@@ -3962,20 +4019,20 @@ function vupp.draw(gfx)
   for i = 1, #R do
     if ringsGot[i] then
       local sx = math.floor(R[i].x - camX)
-      if sx > -10 and sx < 170 then
-        gfx.circle(sx, R[i].y, 5, 10, false)
-        gfx.circle(sx, R[i].y, 4, 9, false)
+      if sx > -20 and sx < 500 then
+        gfx.circle(sx, R[i].y, 10, 10, false)
+        gfx.circle(sx, R[i].y, 8, 9, false)
       end
     end
   end
 
   -- flag
   local fx = math.floor(lvl().flag - camX)
-  if fx > -20 and fx < 170 then
-    gfx.rect(fx, GROUND_Y - 44, 3, 44, 6, true)
-    local wave = math.floor(math.sin(runT * 6) * 2)
-    gfx.rect(fx + 3, GROUND_Y - 42, 18 + wave, 12, 8, true)
-    gfx.circle(fx + 1, GROUND_Y - 45, 2, 10, true)
+  if fx > -40 and fx < 500 then
+    gfx.rect(fx, GROUND_Y - 88, 6, 88, 6, true)
+    local wave = math.floor(math.sin(runT * 6) * 4)
+    gfx.rect(fx + 6, GROUND_Y - 84, 36 + wave, 24, 8, true)
+    gfx.circle(fx + 2, GROUND_Y - 90, 4, 10, true)
   end
 
   -- the runner: bouncy blob with sneakers (outfit color from finishes)
@@ -3983,37 +4040,37 @@ function vupp.draw(gfx)
   local sy = math.floor(player.y)
   local bob = 0
   if grounded and player.vx ~= 0 then
-    bob = math.floor(math.abs(math.sin(runT * 14)) * 2)
+    bob = math.floor(math.abs(math.sin(runT * 14)) * 4)
   end
   if state == "finish" then
-    bob = math.floor(math.abs(math.sin(runT * 10)) * 5)
+    bob = math.floor(math.abs(math.sin(runT * 10)) * 10)
     local a = runT * 6
-    gfx.circle(sx + math.floor(math.cos(a) * 16),
-               sy - 10 + math.floor(math.sin(a) * 16), 1, 10, true)
+    gfx.circle(sx + math.floor(math.cos(a) * 32),
+               sy - 20 + math.floor(math.sin(a) * 32), 2, 10, true)
   end
   drawBlob(gfx, sx, sy, bob, state == "finish")
 
   drawSparks(gfx)
 
   -- HUD: ring count (left), level pips (center), this level's best (right)
-  gfx.circle(12, 13, 5, 10, false)
-  gfx.circle(12, 13, 4, 9, false)
-  gfx.text(tostring(ringCount), 24, 8, 7, 2)
+  gfx.circle(24, 26, 10, 10, false)
+  gfx.circle(24, 26, 8, 9, false)
+  gfx.text(tostring(ringCount), 48, 18, 7, 3)
   drawLevelPips(gfx)
-  gfx.circle(134, 13, 4, 10, true)
-  gfx.circle(134, 13, 2, 9, true)
-  gfx.text(tostring(ringsBest[level]), 142, 8, 10, 2)
+  gfx.circle(428, 26, 8, 10, true)
+  gfx.circle(428, 26, 4, 9, true)
+  gfx.text(tostring(ringsBest[level]), 444, 18, 10, 3)
 
   -- celebration banners
   if state == "finish" then
     if lapDone then
-      gfx.rect(8, 60, 144, 24, 7, true)
-      gfx.rect(8, 60, 144, 24, 10, false)
-      gfx.text("you did them all!", 12, 66, 8, 2)
+      gfx.rect(96, 112, 288, 48, 7, true)
+      gfx.rect(96, 112, 288, 48, 10, false)
+      gfx.text("you did them all!", 138, 127, 8, 3)
     elseif perfectRun then
-      gfx.rect(32, 60, 96, 24, 7, true)
-      gfx.rect(32, 60, 96, 24, 10, false)
-      gfx.text("perfect!", 48, 66, 9, 2)
+      gfx.rect(144, 112, 192, 48, 7, true)
+      gfx.rect(144, 112, 192, 48, 10, false)
+      gfx.text("perfect!", 192, 127, 9, 3)
     end
   end
 end
@@ -4026,21 +4083,25 @@ end
       category: "learning",
       summary: "tracks spelling.word, spelling.tier_up; uses the touchscreen",
       palette: 0,
-      lines: 877,
+      lines: 882,
       files: {
-        "app.json": '{\n  "slug": "spelling",\n  "title": "Spelling",\n  "version": "1.3.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 8,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "words_completed": {\n              "type": "number",\n              "description": "Total words your kid has spelled correctly"\n            },\n            "tier2_seen": {\n              "type": "boolean",\n              "description": "The 4-letter word tier is unlocked"\n            },\n            "cycle": {\n              "type": "object",\n              "description": "Where they are in the shuffled walk through the word list (no repeats until every word has come up)",\n              "properties": {\n                "order": {\n                  "type": "string",\n                  "description": "Shuffled word order, one letter-coded index per word"\n                },\n                "pos": {\n                  "type": "number",\n                  "description": "Next position in that order"\n                }\n              }\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How many words your kid has spelled"\n      }\n    },\n    "commands": {},\n    "events": {\n      "spelling.word": {\n        "description": "Your kid completed a word",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "word": {\n              "type": "string",\n              "description": "The word that was spelled"\n            }\n          }\n        }\n      },\n      "spelling.tier_up": {\n        "description": "Your kid unlocked the big 4-letter words!",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "words": {\n              "type": "number",\n              "description": "Words spelled when the unlock happened"\n            }\n          }\n        }\n      }\n    }\n  }\n}\n',
+        "app.json": '{\n  "slug": "spelling",\n  "title": "Spelling",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "words_completed": {\n              "type": "number",\n              "description": "Total words your kid has spelled correctly"\n            },\n            "tier2_seen": {\n              "type": "boolean",\n              "description": "The 4-letter word tier is unlocked"\n            },\n            "cycle": {\n              "type": "object",\n              "description": "Where they are in the shuffled walk through the word list (no repeats until every word has come up)",\n              "properties": {\n                "order": {\n                  "type": "string",\n                  "description": "Shuffled word order, one letter-coded index per word"\n                },\n                "pos": {\n                  "type": "number",\n                  "description": "Next position in that order"\n                }\n              }\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How many words your kid has spelled"\n      }\n    },\n    "commands": {},\n    "events": {\n      "spelling.word": {\n        "description": "Your kid completed a word",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "word": {\n              "type": "string",\n              "description": "The word that was spelled"\n            }\n          }\n        }\n      },\n      "spelling.tier_up": {\n        "description": "Your kid unlocked the big 4-letter words!",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "words": {\n              "type": "number",\n              "description": "Words spelled when the unlock happened"\n            }\n          }\n        }\n      }\n    }\n  }\n}\n',
         "main.lua": `-- luacheck: globals vupp
--- Spelling: one word per round with a friendly picture, one letter missing
--- (sometimes two at tier 2), three big letter cards below. Tap the right
--- letter (or d-pad + A). Wrong answers wobble sillily; the star row builds
--- from the lifetime words_completed count, like Shape Match's lifetime stars.
+-- Spelling: one word per round with a friendly picture (left), one letter
+-- missing (sometimes two at tier 2), three big letter cards in a row along
+-- the bottom. Tap the right letter (or d-pad + A). Wrong answers wobble
+-- sillily; the star row builds from the lifetime words_completed count,
+-- like Shape Match's lifetime stars.
 --
 -- Content: two tiers \u2014 20 three-letter words, then 22 four-letter words that
 -- unlock (with a party) once words_completed reaches TIER2_AT. Distractor
 -- letters are plausible (other vowels for vowel slots, look-alike consonants
 -- like b/d/p for consonant slots). Words cycle in shuffled order through the
 -- whole active list before any repeat, and the cycle survives relaunches.
--- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).
+-- Canvas 480x320 landscape (native hires, engine v14), default PICO-8
+-- palette (docs/07-app-library.md). Text tops out at size 3 (12x18), so the
+-- big word keeps its glyph-tied metrics and is centered by measure instead
+-- of inheriting doubled classic x positions.
 
 local T1 = { "CAT", "DOG", "SUN", "BUS", "HAT", "PIG", "CUP", "BED", "FOX", "JAM",
              "BEE", "COW", "EGG", "CAR", "PEN", "BOX", "ANT", "OWL", "KEY", "MAP" }
@@ -4059,9 +4120,9 @@ local CONFUSE = {
   S = "ZC", T = "LF", V = "WU", W = "MV", X = "KY", Y = "XV", Z = "SN",
 }
 
-local CARD_X, CARD_W, CARD_H = 8, 144, 30
-local CARD_Y = { 134, 170, 206 }
-local CARD_ZONE = 36
+local CARD_X = { 16, 168, 320 }
+local CARD_Y, CARD_W, CARD_H = 220, 144, 88
+local CARD_ZONE = 160      -- touch column width per card
 
 local word                 -- current word
 local blanks = {}          -- ascending letter positions hidden this round
@@ -4339,9 +4400,9 @@ function vupp.update(dt)
     return
   end
 
-  if vupp.btnp("up") then
+  if vupp.btnp("left") then
     sel = math.max(1, sel - 1)
-  elseif vupp.btnp("down") then
+  elseif vupp.btnp("right") then
     sel = math.min(3, sel + 1)
   end
   if vupp.btnp("a") then
@@ -4350,8 +4411,8 @@ function vupp.update(dt)
 
   local touch = vupp.touch()
   if touch then
-    if not touchWasDown and touch.y >= CARD_Y[1] then
-      local card = math.min(3, math.floor((touch.y - CARD_Y[1]) / CARD_ZONE) + 1)
+    if not touchWasDown and touch.y >= CARD_Y - 8 then
+      local card = math.min(3, math.floor(touch.x / CARD_ZONE) + 1)
       answer(card)
     end
     touchWasDown = true
@@ -4363,16 +4424,16 @@ end
 -- ---- picture toolkit: small shapes composed into 42 recognizable pics ----
 
 local function eyes(g, x, y, dx, r)
-  r = r or 3
+  r = r or 6
   g.circle(x - dx, y, r, 0, true)
   g.circle(x + dx, y, r, 0, true)
 end
 
 local function wheels(g, x, y, dx)
-  g.circle(x - dx, y, 6, 0, true)
-  g.circle(x + dx, y, 6, 0, true)
-  g.circle(x - dx, y, 2, 6, true)
-  g.circle(x + dx, y, 2, 6, true)
+  g.circle(x - dx, y, 12, 0, true)
+  g.circle(x + dx, y, 12, 0, true)
+  g.circle(x - dx, y, 4, 6, true)
+  g.circle(x + dx, y, 4, 6, true)
 end
 
 local function drawStarShape(g, x, y, r, color)
@@ -4384,424 +4445,424 @@ local function drawStarShape(g, x, y, r, color)
   end
 end
 
--- recognizable beats fancy; every pic fits in x\xB134, y\xB134 around its center
+-- recognizable beats fancy; every pic fits in x\xB168, y\xB168 around its center
 
 local function picCat(g, x, y)
-  g.circle(x - 14, y - 16, 7, 9, true)   -- ears
-  g.circle(x + 14, y - 16, 7, 9, true)
-  g.circle(x, y, 22, 9, true)
-  eyes(g, x, y - 4, 8)
-  g.circle(x, y + 4, 2, 14, true)        -- nose
-  g.line(x - 20, y + 6, x - 30, y + 3, 0)
-  g.line(x - 20, y + 10, x - 30, y + 11, 0)
-  g.line(x + 20, y + 6, x + 30, y + 3, 0)
-  g.line(x + 20, y + 10, x + 30, y + 11, 0)
+  g.circle(x - 28, y - 32, 14, 9, true)  -- ears
+  g.circle(x + 28, y - 32, 14, 9, true)
+  g.circle(x, y, 44, 9, true)
+  eyes(g, x, y - 8, 16)
+  g.circle(x, y + 8, 4, 14, true)        -- nose
+  g.line(x - 40, y + 12, x - 60, y + 6, 0)
+  g.line(x - 40, y + 20, x - 60, y + 22, 0)
+  g.line(x + 40, y + 12, x + 60, y + 6, 0)
+  g.line(x + 40, y + 20, x + 60, y + 22, 0)
 end
 
 local function picDog(g, x, y)
-  g.rect(x - 26, y - 14, 10, 22, 4, true)  -- floppy ears
-  g.rect(x + 16, y - 14, 10, 22, 4, true)
-  g.circle(x, y, 22, 15, true)
-  eyes(g, x, y - 5, 8)
-  g.circle(x, y + 6, 8, 7, true)           -- muzzle
-  g.circle(x, y + 3, 3, 0, true)
-  g.rect(x - 2, y + 10, 4, 7, 8, true)     -- tongue
+  g.rect(x - 52, y - 28, 20, 44, 4, true)  -- floppy ears
+  g.rect(x + 32, y - 28, 20, 44, 4, true)
+  g.circle(x, y, 44, 15, true)
+  eyes(g, x, y - 10, 16)
+  g.circle(x, y + 12, 16, 7, true)         -- muzzle
+  g.circle(x, y + 6, 6, 0, true)
+  g.rect(x - 4, y + 20, 8, 14, 8, true)    -- tongue
 end
 
 local function picSun(g, x, y)
   for i = 0, 7 do
     local a = i * math.pi / 4
-    g.line(x + math.floor(math.cos(a) * 20), y + math.floor(math.sin(a) * 20),
-           x + math.floor(math.cos(a) * 30), y + math.floor(math.sin(a) * 30), 9)
+    g.line(x + math.floor(math.cos(a) * 40), y + math.floor(math.sin(a) * 40),
+           x + math.floor(math.cos(a) * 60), y + math.floor(math.sin(a) * 60), 9)
   end
-  g.circle(x, y, 17, 10, true)
-  eyes(g, x, y - 3, 6, 2)
-  g.line(x - 4, y + 6, x + 4, y + 6, 0)
+  g.circle(x, y, 34, 10, true)
+  eyes(g, x, y - 6, 12, 4)
+  g.line(x - 8, y + 12, x + 8, y + 12, 0)
 end
 
 local function picBus(g, x, y)
-  g.rect(x - 30, y - 14, 60, 26, 10, true)
-  g.rect(x - 24, y - 8, 12, 10, 12, true)
-  g.rect(x - 6, y - 8, 12, 10, 12, true)
-  g.rect(x + 12, y - 8, 12, 10, 12, true)
-  wheels(g, x, y + 14, 18)
+  g.rect(x - 60, y - 28, 120, 52, 10, true)
+  g.rect(x - 48, y - 16, 24, 20, 12, true)
+  g.rect(x - 12, y - 16, 24, 20, 12, true)
+  g.rect(x + 24, y - 16, 24, 20, 12, true)
+  wheels(g, x, y + 28, 36)
 end
 
 local function picHat(g, x, y)
-  g.rect(x - 30, y + 8, 60, 6, 12, true)   -- brim
-  g.rect(x - 16, y - 18, 32, 26, 12, true) -- crown
-  g.rect(x - 16, y + 2, 32, 6, 8, true)    -- band
+  g.rect(x - 60, y + 16, 120, 12, 12, true) -- brim
+  g.rect(x - 32, y - 36, 64, 52, 12, true)  -- crown
+  g.rect(x - 32, y + 4, 64, 12, 8, true)    -- band
 end
 
 local function picPig(g, x, y)
-  g.circle(x - 14, y - 16, 6, 14, true)
-  g.circle(x + 14, y - 16, 6, 14, true)
-  g.circle(x, y, 22, 14, true)
-  eyes(g, x, y - 6, 8)
-  g.circle(x, y + 5, 8, 2, true)           -- snout
-  g.circle(x - 3, y + 5, 1, 0, true)
-  g.circle(x + 3, y + 5, 1, 0, true)
+  g.circle(x - 28, y - 32, 12, 14, true)
+  g.circle(x + 28, y - 32, 12, 14, true)
+  g.circle(x, y, 44, 14, true)
+  eyes(g, x, y - 12, 16)
+  g.circle(x, y + 10, 16, 2, true)         -- snout
+  g.circle(x - 6, y + 10, 2, 0, true)
+  g.circle(x + 6, y + 10, 2, 0, true)
 end
 
 local function picCup(g, x, y)
-  g.circle(x + 22, y, 9, 12, false)        -- handle behind
-  g.rect(x - 18, y - 16, 36, 34, 12, true)
-  g.rect(x - 18, y - 16, 36, 5, 7, true)   -- milk foam
+  g.circle(x + 44, y, 18, 12, false)       -- handle behind
+  g.rect(x - 36, y - 32, 72, 68, 12, true)
+  g.rect(x - 36, y - 32, 72, 10, 7, true)  -- milk foam
 end
 
 local function picBed(g, x, y)
-  g.rect(x - 30, y - 2, 60, 12, 8, true)   -- blanket
-  g.rect(x - 30, y + 10, 60, 5, 4, true)   -- frame
-  g.rect(x - 30, y - 14, 8, 29, 4, true)   -- headboard
-  g.rect(x - 20, y - 8, 16, 7, 7, true)    -- pillow
-  g.rect(x - 30, y + 15, 4, 6, 4, true)
-  g.rect(x + 26, y + 15, 4, 6, 4, true)
+  g.rect(x - 60, y - 4, 120, 24, 8, true)  -- blanket
+  g.rect(x - 60, y + 20, 120, 10, 4, true) -- frame
+  g.rect(x - 60, y - 28, 16, 58, 4, true)  -- headboard
+  g.rect(x - 40, y - 16, 32, 14, 7, true)  -- pillow
+  g.rect(x - 60, y + 30, 8, 12, 4, true)
+  g.rect(x + 52, y + 30, 8, 12, 4, true)
 end
 
 local function picFox(g, x, y)
-  g.circle(x - 14, y - 18, 8, 9, true)     -- pointy-ish ears
-  g.circle(x + 14, y - 18, 8, 9, true)
-  g.circle(x, y, 22, 9, true)
-  g.circle(x, y + 8, 10, 7, true)          -- white muzzle
-  eyes(g, x, y - 5, 8)
-  g.circle(x, y + 6, 2, 0, true)
+  g.circle(x - 28, y - 36, 16, 9, true)    -- pointy-ish ears
+  g.circle(x + 28, y - 36, 16, 9, true)
+  g.circle(x, y, 44, 9, true)
+  g.circle(x, y + 16, 20, 7, true)         -- white muzzle
+  eyes(g, x, y - 10, 16)
+  g.circle(x, y + 12, 4, 0, true)
 end
 
 local function picJam(g, x, y)
-  g.rect(x - 16, y - 10, 32, 28, 8, true)  -- jar of red jam
-  g.rect(x - 18, y - 16, 36, 7, 4, true)   -- lid
-  g.rect(x - 10, y - 2, 20, 12, 7, true)   -- label
-  g.circle(x, y + 4, 3, 8, true)
+  g.rect(x - 32, y - 20, 64, 56, 8, true)  -- jar of red jam
+  g.rect(x - 36, y - 32, 72, 14, 4, true)  -- lid
+  g.rect(x - 20, y - 4, 40, 24, 7, true)   -- label
+  g.circle(x, y + 8, 6, 8, true)
 end
 
 local function picBee(g, x, y)
-  g.circle(x - 10, y - 16, 7, 12, true)    -- wings
-  g.circle(x + 10, y - 16, 7, 12, true)
-  g.circle(x, y, 16, 10, true)
-  g.rect(x - 14, y - 4, 28, 4, 0, true)    -- stripes
-  g.rect(x - 15, y + 4, 30, 4, 0, true)
-  eyes(g, x, y - 9, 6, 2)
-  g.line(x + 16, y + 8, x + 24, y + 14, 0) -- stinger
+  g.circle(x - 20, y - 32, 14, 12, true)   -- wings
+  g.circle(x + 20, y - 32, 14, 12, true)
+  g.circle(x, y, 32, 10, true)
+  g.rect(x - 28, y - 8, 56, 8, 0, true)    -- stripes
+  g.rect(x - 30, y + 8, 60, 8, 0, true)
+  eyes(g, x, y - 18, 12, 4)
+  g.line(x + 32, y + 16, x + 48, y + 28, 0) -- stinger
 end
 
 local function picCow(g, x, y)
-  g.circle(x - 16, y - 16, 6, 6, true)     -- ears
-  g.circle(x + 16, y - 16, 6, 6, true)
-  g.circle(x, y, 22, 7, true)              -- white head
-  g.circle(x - 13, y - 10, 5, 0, true)     -- spots
-  g.circle(x + 12, y - 4, 4, 0, true)
-  eyes(g, x, y - 6, 7, 2)
-  g.rect(x - 10, y + 8, 20, 12, 14, true)  -- pink muzzle
-  g.circle(x - 5, y + 14, 2, 2, true)
-  g.circle(x + 5, y + 14, 2, 2, true)
+  g.circle(x - 32, y - 32, 12, 6, true)    -- ears
+  g.circle(x + 32, y - 32, 12, 6, true)
+  g.circle(x, y, 44, 7, true)              -- white head
+  g.circle(x - 26, y - 20, 10, 0, true)    -- spots
+  g.circle(x + 24, y - 8, 8, 0, true)
+  eyes(g, x, y - 12, 14, 4)
+  g.rect(x - 20, y + 16, 40, 24, 14, true) -- pink muzzle
+  g.circle(x - 10, y + 28, 4, 2, true)
+  g.circle(x + 10, y + 28, 4, 2, true)
 end
 
 local function picEgg(g, x, y)
-  g.circle(x, y + 6, 15, 7, true)
-  g.circle(x, y - 4, 12, 7, true)
-  g.circle(x - 5, y - 4, 2, 6, true)       -- speckles
-  g.circle(x + 4, y + 6, 2, 6, true)
-  g.circle(x + 6, y - 8, 1, 6, true)
+  g.circle(x, y + 12, 30, 7, true)
+  g.circle(x, y - 8, 24, 7, true)
+  g.circle(x - 10, y - 8, 4, 6, true)      -- speckles
+  g.circle(x + 8, y + 12, 4, 6, true)
+  g.circle(x + 12, y - 16, 2, 6, true)
 end
 
 local function picCar(g, x, y)
-  g.rect(x - 30, y - 2, 60, 14, 8, true)   -- body
-  g.rect(x - 16, y - 14, 32, 12, 8, true)  -- cabin
-  g.rect(x - 12, y - 11, 11, 9, 12, true)  -- windows
-  g.rect(x + 2, y - 11, 11, 9, 12, true)
-  wheels(g, x, y + 12, 18)
+  g.rect(x - 60, y - 4, 120, 28, 8, true)  -- body
+  g.rect(x - 32, y - 28, 64, 24, 8, true)  -- cabin
+  g.rect(x - 24, y - 22, 22, 18, 12, true) -- windows
+  g.rect(x + 4, y - 22, 22, 18, 12, true)
+  wheels(g, x, y + 24, 36)
 end
 
 local function picPen(g, x, y)
-  g.rect(x - 5, y - 26, 10, 34, 12, true)  -- barrel
-  g.rect(x - 5, y - 26, 10, 6, 7, true)    -- cap top
-  g.rect(x - 3, y + 8, 6, 8, 10, true)     -- nib
-  g.circle(x, y + 18, 2, 0, true)          -- tip
-  g.line(x - 26, y + 24, x - 8, y + 20, 7) -- squiggle it drew
-  g.line(x - 8, y + 20, x - 18, y + 28, 7)
+  g.rect(x - 10, y - 52, 20, 68, 12, true) -- barrel
+  g.rect(x - 10, y - 52, 20, 12, 7, true)  -- cap top
+  g.rect(x - 6, y + 16, 12, 16, 10, true)  -- nib
+  g.circle(x, y + 36, 4, 0, true)          -- tip
+  g.line(x - 52, y + 48, x - 16, y + 40, 7) -- squiggle it drew
+  g.line(x - 16, y + 40, x - 36, y + 56, 7)
 end
 
 local function picBox(g, x, y)
-  g.rect(x - 24, y - 8, 48, 28, 4, true)
-  g.rect(x - 27, y - 16, 54, 9, 4, true)   -- lid
-  g.line(x - 24, y - 7, x + 23, y - 7, 0)
-  g.rect(x - 3, y - 16, 6, 36, 9, true)    -- tape
+  g.rect(x - 48, y - 16, 96, 56, 4, true)
+  g.rect(x - 54, y - 32, 108, 18, 4, true) -- lid
+  g.line(x - 48, y - 14, x + 46, y - 14, 0)
+  g.rect(x - 6, y - 32, 12, 72, 9, true)   -- tape
 end
 
 local function picAnt(g, x, y)
-  g.circle(x - 16, y + 4, 8, 4, true)      -- back
-  g.circle(x, y + 2, 7, 4, true)           -- middle
-  g.circle(x + 15, y - 2, 9, 4, true)      -- head
-  g.line(x + 12, y - 10, x + 8, y - 18, 0)   -- antennae
-  g.line(x + 18, y - 10, x + 22, y - 18, 0)
-  g.line(x - 16, y + 12, x - 20, y + 22, 0)  -- legs
-  g.line(x - 4, y + 8, x - 6, y + 22, 0)
-  g.line(x + 4, y + 8, x + 8, y + 22, 0)
-  g.circle(x + 18, y - 4, 2, 7, true)      -- eye
+  g.circle(x - 32, y + 8, 16, 4, true)     -- back
+  g.circle(x, y + 4, 14, 4, true)          -- middle
+  g.circle(x + 30, y - 4, 18, 4, true)     -- head
+  g.line(x + 24, y - 20, x + 16, y - 36, 0)  -- antennae
+  g.line(x + 36, y - 20, x + 44, y - 36, 0)
+  g.line(x - 32, y + 24, x - 40, y + 44, 0)  -- legs
+  g.line(x - 8, y + 16, x - 12, y + 44, 0)
+  g.line(x + 8, y + 16, x + 16, y + 44, 0)
+  g.circle(x + 36, y - 8, 4, 7, true)      -- eye
 end
 
 local function picOwl(g, x, y)
-  g.rect(x - 18, y - 26, 6, 10, 4, true)   -- ear tufts
-  g.rect(x + 12, y - 26, 6, 10, 4, true)
-  g.circle(x, y, 22, 4, true)              -- body
-  g.circle(x, y + 10, 10, 15, true)        -- belly
-  g.circle(x - 8, y - 6, 7, 7, true)       -- eye discs
-  g.circle(x + 8, y - 6, 7, 7, true)
-  g.circle(x - 8, y - 6, 3, 0, true)
-  g.circle(x + 8, y - 6, 3, 0, true)
-  g.rect(x - 2, y + 1, 4, 6, 9, true)      -- beak
+  g.rect(x - 36, y - 52, 12, 20, 4, true)  -- ear tufts
+  g.rect(x + 24, y - 52, 12, 20, 4, true)
+  g.circle(x, y, 44, 4, true)              -- body
+  g.circle(x, y + 20, 20, 15, true)        -- belly
+  g.circle(x - 16, y - 12, 14, 7, true)    -- eye discs
+  g.circle(x + 16, y - 12, 14, 7, true)
+  g.circle(x - 16, y - 12, 6, 0, true)
+  g.circle(x + 16, y - 12, 6, 0, true)
+  g.rect(x - 4, y + 2, 8, 12, 9, true)     -- beak
 end
 
 local function picKey(g, x, y)
-  g.circle(x - 18, y, 10, 10, false)       -- ring head
-  g.circle(x - 18, y, 8, 10, false)
-  g.circle(x - 18, y, 9, 10, false)
-  g.rect(x - 8, y - 2, 34, 5, 10, true)    -- shaft
-  g.rect(x + 18, y + 3, 4, 9, 10, true)    -- teeth
-  g.rect(x + 10, y + 3, 4, 6, 10, true)
+  g.circle(x - 36, y, 20, 10, false)       -- ring head
+  g.circle(x - 36, y, 16, 10, false)
+  g.circle(x - 36, y, 18, 10, false)
+  g.rect(x - 16, y - 4, 68, 10, 10, true)  -- shaft
+  g.rect(x + 36, y + 6, 8, 18, 10, true)   -- teeth
+  g.rect(x + 20, y + 6, 8, 12, 10, true)
 end
 
 local function picMap(g, x, y)
-  g.rect(x - 26, y - 16, 52, 36, 15, true) -- paper
-  g.line(x - 9, y - 16, x - 9, y + 19, 6)  -- folds
-  g.line(x + 9, y - 16, x + 9, y + 19, 6)
-  g.line(x - 20, y + 14, x - 12, y + 5, 8) -- dashed treasure path
-  g.line(x - 8, y + 1, x, y - 3, 8)
-  g.line(x + 4, y - 5, x + 10, y - 8, 8)
-  g.line(x + 13, y - 13, x + 21, y - 5, 8) -- X marks the spot
-  g.line(x + 21, y - 13, x + 13, y - 5, 8)
+  g.rect(x - 52, y - 32, 104, 72, 15, true) -- paper
+  g.line(x - 18, y - 32, x - 18, y + 38, 6) -- folds
+  g.line(x + 18, y - 32, x + 18, y + 38, 6)
+  g.line(x - 40, y + 28, x - 24, y + 10, 8) -- dashed treasure path
+  g.line(x - 16, y + 2, x, y - 6, 8)
+  g.line(x + 8, y - 10, x + 20, y - 16, 8)
+  g.line(x + 26, y - 26, x + 42, y - 10, 8) -- X marks the spot
+  g.line(x + 42, y - 26, x + 26, y - 10, 8)
 end
 
 local function picFish(g, x, y)
-  g.tri(x - 10, y, x - 26, y - 12, x - 26, y + 12, 9)  -- tail
-  g.tri(x, y - 12, x + 8, y - 22, x + 12, y - 10, 9)   -- top fin
-  g.circle(x + 2, y, 16, 9, true)                      -- body
-  g.circle(x + 8, y - 4, 3, 7, true)                   -- eye
-  g.circle(x + 9, y - 4, 1, 0, true)
-  g.line(x + 13, y + 5, x + 17, y + 7, 0)              -- mouth
-  g.circle(x + 24, y - 14, 2, 7, false)                -- bubbles
-  g.circle(x + 28, y - 22, 3, 7, false)
+  g.tri(x - 20, y, x - 52, y - 24, x - 52, y + 24, 9)  -- tail
+  g.tri(x, y - 24, x + 16, y - 44, x + 24, y - 20, 9)  -- top fin
+  g.circle(x + 4, y, 32, 9, true)                      -- body
+  g.circle(x + 16, y - 8, 6, 7, true)                  -- eye
+  g.circle(x + 18, y - 8, 2, 0, true)
+  g.line(x + 26, y + 10, x + 34, y + 14, 0)            -- mouth
+  g.circle(x + 48, y - 28, 4, 7, false)                -- bubbles
+  g.circle(x + 56, y - 44, 6, 7, false)
 end
 
 local function picFrog(g, x, y)
-  g.circle(x - 10, y - 16, 8, 11, true)    -- bump eyes
-  g.circle(x + 10, y - 16, 8, 11, true)
-  g.circle(x, y + 2, 20, 11, true)         -- head
-  g.circle(x - 10, y - 16, 4, 7, true)
-  g.circle(x + 10, y - 16, 4, 7, true)
-  g.circle(x - 10, y - 16, 2, 0, true)
-  g.circle(x + 10, y - 16, 2, 0, true)
-  g.line(x - 10, y + 8, x + 10, y + 8, 0)  -- wide smile
-  g.line(x - 12, y + 5, x - 10, y + 8, 0)
-  g.line(x + 10, y + 8, x + 12, y + 5, 0)
+  g.circle(x - 20, y - 32, 16, 11, true)   -- bump eyes
+  g.circle(x + 20, y - 32, 16, 11, true)
+  g.circle(x, y + 4, 40, 11, true)         -- head
+  g.circle(x - 20, y - 32, 8, 7, true)
+  g.circle(x + 20, y - 32, 8, 7, true)
+  g.circle(x - 20, y - 32, 4, 0, true)
+  g.circle(x + 20, y - 32, 4, 0, true)
+  g.line(x - 20, y + 16, x + 20, y + 16, 0) -- wide smile
+  g.line(x - 24, y + 10, x - 20, y + 16, 0)
+  g.line(x + 20, y + 16, x + 24, y + 10, 0)
 end
 
 local function picCake(g, x, y)
-  g.rect(x - 28, y + 18, 56, 4, 6, true)   -- plate
-  g.rect(x - 24, y - 2, 48, 20, 14, true)  -- cake
-  g.rect(x - 24, y - 2, 48, 6, 7, true)    -- icing
-  g.circle(x - 14, y + 1, 1, 8, true)      -- sprinkles
-  g.circle(x - 2, y + 2, 1, 11, true)
-  g.circle(x + 12, y + 1, 1, 12, true)
-  g.rect(x - 2, y - 16, 4, 14, 12, true)   -- candle
-  g.circle(x, y - 19, 3, 9, true)          -- flame
-  g.circle(x, y - 20, 1, 10, true)
+  g.rect(x - 56, y + 36, 112, 8, 6, true)  -- plate
+  g.rect(x - 48, y - 4, 96, 40, 14, true)  -- cake
+  g.rect(x - 48, y - 4, 96, 12, 7, true)   -- icing
+  g.circle(x - 28, y + 2, 2, 8, true)      -- sprinkles
+  g.circle(x - 4, y + 4, 2, 11, true)
+  g.circle(x + 24, y + 2, 2, 12, true)
+  g.rect(x - 4, y - 32, 8, 28, 12, true)   -- candle
+  g.circle(x, y - 38, 6, 9, true)          -- flame
+  g.circle(x, y - 40, 2, 10, true)
 end
 
 local function picStar(g, x, y)
-  drawStarShape(g, x, y, 20, 10)
-  eyes(g, x, y - 2, 5, 2)
-  g.line(x - 3, y + 6, x + 3, y + 6, 0)
+  drawStarShape(g, x, y, 40, 10)
+  eyes(g, x, y - 4, 10, 4)
+  g.line(x - 6, y + 12, x + 6, y + 12, 0)
 end
 
 local function picMoon(g, x, y)
-  g.circle(x - 2, y, 18, 10, true)
-  g.circle(x + 9, y - 4, 14, 1, true)      -- bg-colored bite = crescent
-  drawStarShape(g, x + 18, y + 12, 3, 7)
-  drawStarShape(g, x + 22, y - 14, 2, 7)
-  drawStarShape(g, x + 12, y - 22, 2, 7)
+  g.circle(x - 4, y, 36, 10, true)
+  g.circle(x + 18, y - 8, 28, 1, true)     -- bg-colored bite = crescent
+  drawStarShape(g, x + 36, y + 24, 6, 7)
+  drawStarShape(g, x + 44, y - 28, 4, 7)
+  drawStarShape(g, x + 24, y - 44, 4, 7)
 end
 
 local function picBoat(g, x, y)
-  g.line(x, y - 22, x, y + 6, 6)           -- mast
-  g.tri(x + 3, y - 20, x + 3, y + 2, x + 22, y + 2, 7)   -- sail
-  g.tri(x - 3, y - 14, x - 3, y + 2, x - 16, y + 2, 15)  -- little sail
-  g.rect(x - 24, y + 6, 48, 10, 4, true)   -- hull
-  g.line(x - 28, y + 20, x - 10, y + 20, 12)             -- waves
-  g.line(x - 2, y + 22, x + 16, y + 22, 12)
-  g.line(x + 18, y + 18, x + 30, y + 18, 12)
+  g.line(x, y - 44, x, y + 12, 6)          -- mast
+  g.tri(x + 6, y - 40, x + 6, y + 4, x + 44, y + 4, 7)   -- sail
+  g.tri(x - 6, y - 28, x - 6, y + 4, x - 32, y + 4, 15)  -- little sail
+  g.rect(x - 48, y + 12, 96, 20, 4, true)  -- hull
+  g.line(x - 56, y + 40, x - 20, y + 40, 12)             -- waves
+  g.line(x - 4, y + 44, x + 32, y + 44, 12)
+  g.line(x + 36, y + 36, x + 60, y + 36, 12)
 end
 
 local function picTree(g, x, y)
-  g.rect(x - 4, y + 2, 8, 18, 4, true)     -- trunk
-  g.circle(x - 11, y - 1, 10, 11, true)    -- leaves
-  g.circle(x + 11, y - 1, 10, 11, true)
-  g.circle(x, y - 10, 14, 11, true)
-  g.circle(x - 4, y - 12, 2, 8, true)      -- apples
-  g.circle(x + 7, y - 3, 2, 8, true)
-  g.circle(x - 9, y + 2, 2, 8, true)
+  g.rect(x - 8, y + 4, 16, 36, 4, true)    -- trunk
+  g.circle(x - 22, y - 2, 20, 11, true)    -- leaves
+  g.circle(x + 22, y - 2, 20, 11, true)
+  g.circle(x, y - 20, 28, 11, true)
+  g.circle(x - 8, y - 24, 4, 8, true)      -- apples
+  g.circle(x + 14, y - 6, 4, 8, true)
+  g.circle(x - 18, y + 4, 4, 8, true)
 end
 
 local function picDuck(g, x, y)
-  g.circle(x - 4, y + 6, 14, 10, true)     -- body
-  g.circle(x - 8, y + 4, 6, 9, true)       -- wing
-  g.circle(x + 10, y - 8, 9, 10, true)     -- head
-  g.rect(x + 17, y - 8, 9, 4, 9, true)     -- beak
-  g.circle(x + 12, y - 11, 2, 0, true)     -- eye
-  g.line(x - 24, y + 22, x + 24, y + 22, 12)  -- water
+  g.circle(x - 8, y + 12, 28, 10, true)    -- body
+  g.circle(x - 16, y + 8, 12, 9, true)     -- wing
+  g.circle(x + 20, y - 16, 18, 10, true)   -- head
+  g.rect(x + 34, y - 16, 18, 8, 9, true)   -- beak
+  g.circle(x + 24, y - 22, 4, 0, true)     -- eye
+  g.line(x - 48, y + 44, x + 48, y + 44, 12)  -- water
 end
 
 local function picBird(g, x, y)
-  g.line(x - 14, y - 2, x - 26, y - 8, 12) -- tail feathers
-  g.line(x - 14, y + 2, x - 26, y + 2, 12)
-  g.circle(x, y, 14, 12, true)             -- body
-  g.tri(x + 12, y - 4, x + 22, y, x + 12, y + 4, 9)  -- beak
-  g.circle(x + 5, y - 5, 2, 0, true)       -- eye
-  g.circle(x - 5, y + 2, 7, 13, true)      -- wing
-  g.line(x - 3, y + 14, x - 3, y + 21, 9)  -- legs
-  g.line(x + 4, y + 14, x + 4, y + 21, 9)
+  g.line(x - 28, y - 4, x - 52, y - 16, 12) -- tail feathers
+  g.line(x - 28, y + 4, x - 52, y + 4, 12)
+  g.circle(x, y, 28, 12, true)             -- body
+  g.tri(x + 24, y - 8, x + 44, y, x + 24, y + 8, 9)  -- beak
+  g.circle(x + 10, y - 10, 4, 0, true)     -- eye
+  g.circle(x - 10, y + 4, 14, 13, true)    -- wing
+  g.line(x - 6, y + 28, x - 6, y + 42, 9)  -- legs
+  g.line(x + 8, y + 28, x + 8, y + 42, 9)
 end
 
 local function picCorn(g, x, y)
-  g.tri(x - 6, y + 18, x - 20, y - 8, x - 2, y + 12, 11)  -- husk leaves
-  g.tri(x + 6, y + 18, x + 20, y - 8, x + 2, y + 12, 11)
-  g.circle(x, y - 10, 8, 10, true)         -- cob
-  g.circle(x, y, 10, 10, true)
-  g.circle(x, y + 10, 9, 10, true)
-  g.circle(x - 4, y - 8, 1, 9, true)       -- kernels
-  g.circle(x + 4, y - 4, 1, 9, true)
-  g.circle(x - 3, y + 2, 1, 9, true)
-  g.circle(x + 4, y + 8, 1, 9, true)
+  g.tri(x - 12, y + 36, x - 40, y - 16, x - 4, y + 24, 11)  -- husk leaves
+  g.tri(x + 12, y + 36, x + 40, y - 16, x + 4, y + 24, 11)
+  g.circle(x, y - 20, 16, 10, true)        -- cob
+  g.circle(x, y, 20, 10, true)
+  g.circle(x, y + 20, 18, 10, true)
+  g.circle(x - 8, y - 16, 2, 9, true)      -- kernels
+  g.circle(x + 8, y - 8, 2, 9, true)
+  g.circle(x - 6, y + 4, 2, 9, true)
+  g.circle(x + 8, y + 16, 2, 9, true)
 end
 
 local function picDrum(g, x, y)
-  g.line(x - 16, y - 28, x - 2, y - 12, 4)   -- sticks
-  g.line(x + 16, y - 28, x + 2, y - 12, 4)
-  g.circle(x - 16, y - 28, 3, 15, true)
-  g.circle(x + 16, y - 28, 3, 15, true)
-  g.rect(x - 20, y - 8, 40, 26, 8, true)     -- shell
-  g.rect(x - 20, y - 12, 40, 8, 7, true)     -- head
-  g.line(x - 20, y + 14, x - 10, y + 2, 10)  -- zigzag rope
-  g.line(x - 10, y + 2, x, y + 14, 10)
-  g.line(x, y + 14, x + 10, y + 2, 10)
-  g.line(x + 10, y + 2, x + 20, y + 14, 10)
+  g.line(x - 32, y - 56, x - 4, y - 24, 4)   -- sticks
+  g.line(x + 32, y - 56, x + 4, y - 24, 4)
+  g.circle(x - 32, y - 56, 6, 15, true)
+  g.circle(x + 32, y - 56, 6, 15, true)
+  g.rect(x - 40, y - 16, 80, 52, 8, true)    -- shell
+  g.rect(x - 40, y - 24, 80, 16, 7, true)    -- head
+  g.line(x - 40, y + 28, x - 20, y + 4, 10)  -- zigzag rope
+  g.line(x - 20, y + 4, x, y + 28, 10)
+  g.line(x, y + 28, x + 20, y + 4, 10)
+  g.line(x + 20, y + 4, x + 40, y + 28, 10)
 end
 
 local function picKite(g, x, y)
-  g.tri(x, y - 22, x - 14, y - 4, x + 14, y - 4, 8)
-  g.tri(x - 14, y - 4, x + 14, y - 4, x, y + 14, 10)
-  g.line(x, y - 22, x, y + 14, 7)
-  g.line(x - 14, y - 4, x + 14, y - 4, 7)
-  g.line(x, y + 14, x - 6, y + 22, 7)      -- tail
-  g.line(x - 6, y + 22, x + 2, y + 28, 7)
-  g.rect(x - 9, y + 20, 5, 5, 14, true)    -- bows
-  g.rect(x - 1, y + 26, 5, 5, 12, true)
+  g.tri(x, y - 44, x - 28, y - 8, x + 28, y - 8, 8)
+  g.tri(x - 28, y - 8, x + 28, y - 8, x, y + 28, 10)
+  g.line(x, y - 44, x, y + 28, 7)
+  g.line(x - 28, y - 8, x + 28, y - 8, 7)
+  g.line(x, y + 28, x - 12, y + 44, 7)     -- tail
+  g.line(x - 12, y + 44, x + 4, y + 56, 7)
+  g.rect(x - 18, y + 40, 10, 10, 14, true) -- bows
+  g.rect(x - 2, y + 52, 10, 10, 12, true)
 end
 
 local function picLion(g, x, y)
-  g.circle(x, y, 26, 9, true)              -- mane
-  g.circle(x, y, 17, 10, true)             -- face
-  eyes(g, x, y - 4, 7, 2)
-  g.circle(x, y + 5, 5, 15, true)          -- muzzle
-  g.circle(x, y + 3, 2, 0, true)           -- nose
-  g.line(x, y + 5, x, y + 10, 0)
+  g.circle(x, y, 52, 9, true)              -- mane
+  g.circle(x, y, 34, 10, true)             -- face
+  eyes(g, x, y - 8, 14, 4)
+  g.circle(x, y + 10, 10, 15, true)        -- muzzle
+  g.circle(x, y + 6, 4, 0, true)           -- nose
+  g.line(x, y + 10, x, y + 20, 0)
 end
 
 local function picBear(g, x, y)
-  g.circle(x - 14, y - 16, 7, 4, true)     -- round ears
-  g.circle(x + 14, y - 16, 7, 4, true)
-  g.circle(x, y, 22, 4, true)
-  eyes(g, x, y - 5, 8)
-  g.circle(x, y + 8, 8, 15, true)          -- muzzle
-  g.circle(x, y + 5, 3, 0, true)
+  g.circle(x - 28, y - 32, 14, 4, true)    -- round ears
+  g.circle(x + 28, y - 32, 14, 4, true)
+  g.circle(x, y, 44, 4, true)
+  eyes(g, x, y - 10, 16)
+  g.circle(x, y + 16, 16, 15, true)        -- muzzle
+  g.circle(x, y + 10, 6, 0, true)
 end
 
 local function picRain(g, x, y)
-  g.circle(x - 12, y - 12, 10, 6, true)    -- cloud
-  g.circle(x + 12, y - 12, 10, 6, true)
-  g.circle(x, y - 18, 12, 6, true)
-  g.rect(x - 20, y - 12, 40, 8, 6, true)
+  g.circle(x - 24, y - 24, 20, 6, true)    -- cloud
+  g.circle(x + 24, y - 24, 20, 6, true)
+  g.circle(x, y - 36, 24, 6, true)
+  g.rect(x - 40, y - 24, 80, 16, 6, true)
   for i = 0, 3 do
-    g.line(x - 15 + i * 10, y + 2, x - 18 + i * 10, y + 12, 12)  -- drops
+    g.line(x - 30 + i * 20, y + 4, x - 36 + i * 20, y + 24, 12)  -- drops
   end
 end
 
 local function picMilk(g, x, y)
-  g.tri(x - 14, y - 10, x + 14, y - 10, x, y - 22, 6)  -- gable top
-  g.rect(x - 14, y - 10, 28, 30, 7, true)  -- carton
-  g.rect(x - 14, y - 2, 28, 12, 12, true)  -- label
-  g.circle(x, y + 4, 4, 7, true)           -- milk drop
+  g.tri(x - 28, y - 20, x + 28, y - 20, x, y - 44, 6)  -- gable top
+  g.rect(x - 28, y - 20, 56, 60, 7, true)  -- carton
+  g.rect(x - 28, y - 4, 56, 24, 12, true)  -- label
+  g.circle(x, y + 8, 8, 7, true)           -- milk drop
 end
 
 local function picSock(g, x, y)
-  g.rect(x - 6, y - 24, 16, 8, 7, true)    -- cuff
-  g.rect(x - 6, y - 16, 16, 22, 8, true)   -- leg
-  g.rect(x - 6, y - 10, 16, 4, 12, true)   -- stripe
-  g.rect(x - 20, y - 2, 30, 14, 8, true)   -- foot (toe left)
-  g.rect(x - 24, y - 2, 8, 14, 7, true)    -- toe cap
+  g.rect(x - 12, y - 48, 32, 16, 7, true)  -- cuff
+  g.rect(x - 12, y - 32, 32, 44, 8, true)  -- leg
+  g.rect(x - 12, y - 20, 32, 8, 12, true)  -- stripe
+  g.rect(x - 40, y - 4, 60, 28, 8, true)   -- foot (toe left)
+  g.rect(x - 48, y - 4, 16, 28, 7, true)   -- toe cap
 end
 
 local function picRing(g, x, y)
-  g.circle(x, y + 6, 13, 10, false)        -- thick gold band
-  g.circle(x, y + 6, 12, 10, false)
-  g.circle(x, y + 6, 11, 10, false)
-  g.rect(x - 5, y - 13, 10, 7, 12, true)   -- gem
-  g.tri(x - 5, y - 6, x + 5, y - 6, x, y - 1, 12)
-  g.line(x - 10, y - 19, x - 7, y - 15, 7) -- sparkle
-  g.line(x + 10, y - 19, x + 7, y - 15, 7)
+  g.circle(x, y + 12, 26, 10, false)       -- thick gold band
+  g.circle(x, y + 12, 24, 10, false)
+  g.circle(x, y + 12, 22, 10, false)
+  g.rect(x - 10, y - 26, 20, 14, 12, true) -- gem
+  g.tri(x - 10, y - 12, x + 10, y - 12, x, y - 2, 12)
+  g.line(x - 20, y - 38, x - 14, y - 30, 7) -- sparkle
+  g.line(x + 20, y - 38, x + 14, y - 30, 7)
 end
 
 local function picShip(g, x, y)
-  g.circle(x + 2, y - 22, 3, 6, true)      -- smoke
-  g.circle(x + 8, y - 27, 4, 6, true)
-  g.rect(x - 4, y - 16, 8, 10, 8, true)    -- funnel
-  g.rect(x - 14, y - 6, 28, 10, 7, true)   -- deckhouse
-  g.circle(x - 8, y - 1, 2, 12, true)      -- portholes
-  g.circle(x + 8, y - 1, 2, 12, true)
-  g.rect(x - 28, y + 4, 56, 14, 2, true)   -- hull
-  g.line(x - 30, y + 22, x - 12, y + 22, 12)  -- waves
-  g.line(x - 4, y + 24, x + 14, y + 24, 12)
-  g.line(x + 16, y + 20, x + 30, y + 20, 12)
+  g.circle(x + 4, y - 44, 6, 6, true)      -- smoke
+  g.circle(x + 16, y - 54, 8, 6, true)
+  g.rect(x - 8, y - 32, 16, 20, 8, true)   -- funnel
+  g.rect(x - 28, y - 12, 56, 20, 7, true)  -- deckhouse
+  g.circle(x - 16, y - 2, 4, 12, true)     -- portholes
+  g.circle(x + 16, y - 2, 4, 12, true)
+  g.rect(x - 56, y + 8, 112, 28, 2, true)  -- hull
+  g.line(x - 60, y + 44, x - 24, y + 44, 12)  -- waves
+  g.line(x - 8, y + 48, x + 28, y + 48, 12)
+  g.line(x + 32, y + 40, x + 60, y + 40, 12)
 end
 
 local function picCrab(g, x, y)
-  g.line(x - 12, y - 4, x - 20, y - 10, 8) -- arms
-  g.line(x + 12, y - 4, x + 20, y - 10, 8)
-  g.circle(x - 23, y - 12, 6, 8, true)     -- claws
-  g.circle(x + 23, y - 12, 6, 8, true)
-  g.line(x - 12, y + 8, x - 22, y + 16, 8) -- legs
-  g.line(x - 8, y + 12, x - 14, y + 20, 8)
-  g.line(x + 12, y + 8, x + 22, y + 16, 8)
-  g.line(x + 8, y + 12, x + 14, y + 20, 8)
-  g.circle(x, y + 2, 15, 8, true)          -- body
-  g.line(x - 6, y - 10, x - 6, y - 16, 8)  -- eye stalks
-  g.line(x + 6, y - 10, x + 6, y - 16, 8)
-  g.circle(x - 6, y - 18, 3, 7, true)
-  g.circle(x + 6, y - 18, 3, 7, true)
-  g.circle(x - 6, y - 18, 1, 0, true)
-  g.circle(x + 6, y - 18, 1, 0, true)
-  g.line(x - 4, y + 6, x + 4, y + 6, 0)
+  g.line(x - 24, y - 8, x - 40, y - 20, 8) -- arms
+  g.line(x + 24, y - 8, x + 40, y - 20, 8)
+  g.circle(x - 46, y - 24, 12, 8, true)    -- claws
+  g.circle(x + 46, y - 24, 12, 8, true)
+  g.line(x - 24, y + 16, x - 44, y + 32, 8) -- legs
+  g.line(x - 16, y + 24, x - 28, y + 40, 8)
+  g.line(x + 24, y + 16, x + 44, y + 32, 8)
+  g.line(x + 16, y + 24, x + 28, y + 40, 8)
+  g.circle(x, y + 4, 30, 8, true)          -- body
+  g.line(x - 12, y - 20, x - 12, y - 32, 8) -- eye stalks
+  g.line(x + 12, y - 20, x + 12, y - 32, 8)
+  g.circle(x - 12, y - 36, 6, 7, true)
+  g.circle(x + 12, y - 36, 6, 7, true)
+  g.circle(x - 12, y - 36, 2, 0, true)
+  g.circle(x + 12, y - 36, 2, 0, true)
+  g.line(x - 8, y + 12, x + 8, y + 12, 0)
 end
 
 local function picWorm(g, x, y)
   for i = 4, 0, -1 do
-    local xx = x - 20 + i * 10
-    local yy = y + 4 + math.floor(math.sin(i * 1.6) * 6)
-    g.circle(xx, yy, 7, i == 4 and 14 or 11, true)  -- pink head, green body
+    local xx = x - 40 + i * 20
+    local yy = y + 8 + math.floor(math.sin(i * 1.6) * 12)
+    g.circle(xx, yy, 14, i == 4 and 14 or 11, true)  -- pink head, green body
   end
-  eyes(g, x + 20, y + 1, 3, 1)
-  g.line(x + 18, y + 6, x + 23, y + 6, 0)
+  eyes(g, x + 40, y + 2, 6, 2)
+  g.line(x + 36, y + 12, x + 46, y + 12, 0)
 end
 
 local function picNest(g, x, y)
-  g.circle(x, y + 8, 16, 4, true)          -- bowl
-  g.circle(x - 7, y - 2, 5, 7, true)       -- eggs
-  g.circle(x + 2, y - 4, 5, 12, true)
-  g.circle(x + 10, y - 1, 5, 7, true)
-  g.rect(x - 20, y + 2, 40, 7, 4, true)    -- rim
-  g.line(x - 20, y + 4, x + 4, y + 7, 9)   -- twigs
-  g.line(x - 6, y + 8, x + 20, y + 4, 9)
-  g.line(x - 16, y + 8, x + 12, y + 3, 9)
+  g.circle(x, y + 16, 32, 4, true)         -- bowl
+  g.circle(x - 14, y - 4, 10, 7, true)     -- eggs
+  g.circle(x + 4, y - 8, 10, 12, true)
+  g.circle(x + 20, y - 2, 10, 7, true)
+  g.rect(x - 40, y + 4, 80, 14, 4, true)   -- rim
+  g.line(x - 40, y + 8, x + 8, y + 14, 9)  -- twigs
+  g.line(x - 12, y + 16, x + 40, y + 8, 9)
+  g.line(x - 32, y + 16, x + 24, y + 6, 9)
 end
 
 local PICS = {
@@ -4822,53 +4883,54 @@ function vupp.draw(gfx)
 
   if state == "celebrate" then
     for i = 1, 5 do
-      local x = 24 + (i - 1) * 28
-      local y = 100 + math.floor(math.sin(t * 6 + i) * 8)
-      drawStarShape(gfx, x, y, 12, 10)
+      local x = 128 + (i - 1) * 56
+      local y = 272 + math.floor(math.sin(t * 6 + i) * 16)
+      drawStarShape(gfx, x, y, 24, 10)
     end
-    local wx = 80 - math.floor((#word * 12) / 2)
-    gfx.text(word, wx, 150, 7, 3)
-    PICS[word](gfx, 80, 55)
+    -- size 3 is the engine max (12px advance) \u2014 center by measure
+    local wx = 240 - math.floor((#word * 12) / 2)
+    gfx.text(word, wx, 200, 7, 3)
+    PICS[word](gfx, 240, 96)
     return
   elseif state == "tierup" then
-    PICS.CAKE(gfx, 80, 55)
-    gfx.text("BIG WORDS!", 20, 108, 10, 3)
-    gfx.text("4-letter words", 24, 130, 7, 2)   -- two lines: size 2 won't fit one
-    gfx.text("unlocked!", 44, 144, 7, 2)        -- clears the stars' top bob at y=155
+    PICS.CAKE(gfx, 240, 80)
+    gfx.text("BIG WORDS!", 180, 168, 10, 3)         -- 10 chars, measure-centered
+    gfx.text("4-letter words unlocked!", 96, 220, 7, 3)  -- 24 chars, centered
     for i = 1, 5 do
-      local x = 24 + (i - 1) * 28
-      local y = 175 + math.floor(math.sin(t * 6 + i) * 8)
-      drawStarShape(gfx, x, y, 12, 10)
+      local x = 128 + (i - 1) * 56
+      local y = 280 + math.floor(math.sin(t * 6 + i) * 16)
+      drawStarShape(gfx, x, y, 24, 10)
     end
     return
   end
 
-  -- picture, nudged up to clear the taller size-3 word below it
-  PICS[word](gfx, 80, 48)
+  -- picture on the left half; the word reads beside it on the right
+  PICS[word](gfx, 92, 104)
 
-  -- the word, size 3 (12x18 glyphs \u2014 the word is what the child is reading);
-  -- blank letters hidden until solved, and the active blank's underline pulses
-  -- gold so two-blank rounds read clearly
+  -- the word, size 3 (12x18 glyphs is the engine max, so the letter cells
+  -- keep their glyph-tied metrics and the block re-centers by measure);
+  -- blank letters hidden until solved, and the active blank's underline
+  -- pulses gold so two-blank rounds read clearly
   local bounce = 0
   if state == "won" then
-    bounce = math.floor(math.abs(math.sin(t * 10)) * 4)
+    bounce = math.floor(math.abs(math.sin(t * 10)) * 8)
   end
-  local x0 = 80 - math.floor(((#word - 1) * 22 + 12) / 2)
+  local x0 = 320 - math.floor(((#word - 1) * 22 + 12) / 2)
   for i = 1, #word do
     local ch = string.sub(word, i, i)
     local x = x0 + (i - 1) * 22
-    local y = 88 - (state == "won" and bounce or 0)
+    local y = 96 - (state == "won" and bounce or 0)
     if isBlankAt[i] and not filled[i] and state ~= "won" then
-      gfx.rect(x - 2, 86, 16, 22, 0, true)
+      gfx.rect(x - 2, 94, 16, 22, 0, true)
       local uc = 6
       if i == blanks[blankIdx] then
         uc = (math.floor(t * 4) % 2 == 0) and 10 or 9  -- fill me next!
       end
-      gfx.line(x, 108, x + 12, 108, uc)     -- the blank to fill
+      gfx.line(x, 116, x + 12, 116, uc)     -- the blank to fill
     else
       gfx.text(ch, x, y, isBlankAt[i] and 10 or 7, 3)
     end
-    gfx.line(x, 112, x + 12, 112, 13)
+    gfx.line(x, 120, x + 12, 120, 13)
   end
 
   -- star row (lifetime words_completed, so it survives relaunches)
@@ -4877,31 +4939,31 @@ function vupp.draw(gfx)
     row = 5
   end
   for i = 1, 5 do
-    local x = 40 + (i - 1) * 20
+    local x = 240 + (i - 1) * 40
     if i <= row then
-      drawStarShape(gfx, x, 122, 6, 10)
+      drawStarShape(gfx, x, 176, 12, 10)
     else
-      gfx.circle(x, 122, 2, 13, false)
+      gfx.circle(x, 176, 4, 13, false)
     end
   end
 
-  -- letter cards
+  -- letter cards in a row along the bottom
   for i = 1, 3 do
-    local y = CARD_Y[i]
+    local x = CARD_X[i]
     local xoff = 0
     if wobble[i] > 0 then
-      xoff = math.floor(math.sin(wobble[i] * 30) * 4)
+      xoff = math.floor(math.sin(wobble[i] * 30) * 8)
     end
-    gfx.rect(CARD_X + xoff, y, CARD_W, CARD_H, 7, true)
-    gfx.rect(CARD_X + xoff, y, CARD_W, CARD_H, 6, false)
-    gfx.text(letters[i], 74 + xoff, y + 8, 0, 3)
+    gfx.rect(x + xoff, CARD_Y, CARD_W, CARD_H, 7, true)
+    gfx.rect(x + xoff, CARD_Y, CARD_W, CARD_H, 6, false)
+    gfx.text(letters[i], x + 66 + xoff, CARD_Y + 35, 0, 3)
     if i == sel and state == "play" then
-      local pulse = math.floor(math.sin(t * 6) * 1.5)
-      gfx.rect(CARD_X - 2 + pulse, y - 2 + pulse,
-               CARD_W + 4 - pulse * 2, CARD_H + 4 - pulse * 2, 10, false)
+      local pulse = math.floor(math.sin(t * 6) * 3)
+      gfx.rect(x - 4 + pulse, CARD_Y - 4 + pulse,
+               CARD_W + 8 - pulse * 2, CARD_H + 8 - pulse * 2, 10, false)
     end
     if state == "won" and i == correct then
-      gfx.rect(CARD_X - 2, y - 2, CARD_W + 4, CARD_H + 4, 11, false)
+      gfx.rect(x - 4, CARD_Y - 4, CARD_W + 8, CARD_H + 8, 11, false)
     end
   end
 end
@@ -4914,17 +4976,18 @@ end
       category: "game",
       summary: "tracks blocks.cleared, blocks.milestone, blocks.best",
       palette: 0,
-      lines: 493,
+      lines: 496,
       files: {
         "app.json": `{
   "slug": "tetris",
   "title": "Blocks!",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": "Vupp",
   "category": "game",
   "fps": 30,
   "capabilities": [],
-  "min_engine": 7,
+  "min_engine": 14,
+  "hires": true,
   "parent": {
     "version": 1,
     "documents": {
@@ -5007,12 +5070,15 @@ end
 -- banner that shows the run's score next to the best) and you keep playing.
 -- A preview box shows the next piece, every 10 lines gets a little fanfare,
 -- and beating the best score is a celebrated moment, not just a number.
--- Canvas 160x240, default PICO-8 palette (docs/07-app-library.md).
+-- Native 480x320 landscape canvas (engine v14, hires): the well stays
+-- vertical in the middle, score lives in the left column, best + next-piece
+-- preview in the right column.
+-- Default PICO-8 palette (docs/07-app-library.md).
 
 local COLS, ROWS = 8, 14
-local CELL = 12
-local BX = math.floor((160 - COLS * CELL) / 2)  -- board origin
-local BY = 36
+local CELL = 20
+local BX = math.floor((480 - COLS * CELL) / 2)  -- board origin (centered well)
+local BY = 20
 
 -- pieces: cells in a 4x4 box + rotation pivot (half-integer pivots stay exact)
 local PIECES = {
@@ -5346,8 +5412,8 @@ end
 local function drawCell(gfx, cx, cy, color)
   local x = BX + cx * CELL
   local y = BY + cy * CELL
-  gfx.rect(x, y, CELL - 1, CELL - 1, color, true)
-  gfx.rect(x, y, CELL - 1, 2, 7, true)  -- glossy top edge
+  gfx.rect(x, y, CELL - 2, CELL - 2, color, true)
+  gfx.rect(x, y, CELL - 2, 4, 7, true)  -- glossy top edge
 end
 
 -- a piece drawn tiny, centered on (x, y) with s-px cells (preview box + title)
@@ -5364,37 +5430,37 @@ local function drawMini(gfx, def, x, y, s)
   local oy = y - math.floor((maxy - miny + 1) * s / 2)
   for i = 1, 4 do
     gfx.rect(ox + (def.cells[i][1] - minx) * s,
-             oy + (def.cells[i][2] - miny) * s, s - 1, s - 1, def.color, true)
+             oy + (def.cells[i][2] - miny) * s, s - 2, s - 2, def.color, true)
   end
 end
 
 local function drawStarDot(gfx, x, y)
-  gfx.circle(x, y, 4, 10, true)
-  gfx.circle(x, y, 2, 9, true)
+  gfx.circle(x, y, 8, 10, true)
+  gfx.circle(x, y, 4, 9, true)
 end
 
 local function drawTitle(gfx)
-  -- a friendly row of blocks at the bottom + one piece drifting down
-  for x = 0, COLS - 1 do
-    drawCell(gfx, x, ROWS - 1, PIECES[(x % #PIECES) + 1].color)
+  -- a friendly row of blocks along the bottom + one piece drifting down
+  for x = -8, 15 do
+    drawCell(gfx, x, ROWS, PIECES[((x + 8) % #PIECES) + 1].color)
   end
-  local fallY = math.floor((t * 24) % 104)
-  drawMini(gfx, PIECES[3], 146, 16 + fallY, 8)
+  local fallY = math.floor((t * 48) % 232)
+  drawMini(gfx, PIECES[3], 440, 24 + fallY, 16)
 
-  gfx.text("Blocks!", 52, 52, 7, 2)
-  drawMini(gfx, PIECES[1], 36, 92, 8)
-  drawMini(gfx, PIECES[5], 80, 92, 8)
-  drawMini(gfx, PIECES[2], 124, 92, 8)
+  gfx.text("Blocks!", 240 - 7 * 6, 52, 7, 3)
+  drawMini(gfx, PIECES[1], 120, 140, 16)
+  drawMini(gfx, PIECES[5], 240, 140, 16)
+  drawMini(gfx, PIECES[2], 360, 140, 16)
 
-  gfx.text("< > move", 16, 132, 6, 1)
-  gfx.text("a b spin", 64, 132, 6, 1)
-  gfx.text("v drop", 116, 132, 6, 1)
+  gfx.text("< > move", 56, 200, 6, 2)
+  gfx.text("a b spin", 208, 200, 6, 2)
+  gfx.text("v drop", 360, 200, 6, 2)
   if best > 0 then
-    drawStarDot(gfx, 62, 156)
-    gfx.text(tostring(best), 70, 151, 10, 2)
+    drawStarDot(gfx, 200, 242)
+    gfx.text(tostring(best), 220, 232, 10, 3)
   end
   if math.floor(t * 2) % 2 == 0 then
-    gfx.text("press a", 52, 174, 10, 2)
+    gfx.text("press a", 240 - 7 * 6, 268, 10, 3)
   end
 end
 
@@ -5406,18 +5472,18 @@ function vupp.draw(gfx)
     return
   end
 
-  -- score (left) and best-with-star (right); numbers only, no reading needed
-  gfx.text(tostring(score), 8, 8, 7, 2)
-  drawStarDot(gfx, 118, 13)
+  -- score (left column) and best-with-star (right column); numbers only
+  gfx.text(tostring(score), 16, 20, 7, 3)
+  drawStarDot(gfx, 352, 30)
   local bestCol = 10
   if newBestT > 0 and math.floor(t * 8) % 2 == 0 then
     bestCol = 7  -- flash the record while the celebration runs
   end
-  gfx.text(tostring(best), 126, 8, bestCol, 2)
+  gfx.text(tostring(best), 372, 20, bestCol, 3)
 
   -- board well
-  gfx.rect(BX - 2, BY - 2, COLS * CELL + 4, ROWS * CELL + 4, 0, true)
-  gfx.rect(BX - 2, BY - 2, COLS * CELL + 4, ROWS * CELL + 4, 13, false)
+  gfx.rect(BX - 4, BY - 4, COLS * CELL + 8, ROWS * CELL + 8, 0, true)
+  gfx.rect(BX - 4, BY - 4, COLS * CELL + 8, ROWS * CELL + 8, 13, false)
 
   for y = 1, ROWS do
     local flash = false
@@ -5449,47 +5515,47 @@ function vupp.draw(gfx)
     end
   end
 
-  -- next-piece preview in the bottom strip
-  gfx.text("next", 38, 217, 6, 1)
-  gfx.rect(60, 206, 40, 30, 0, true)
-  gfx.rect(60, 206, 40, 30, 13, false)
-  drawMini(gfx, PIECES[nextIdx], 80, 221, 6)
+  -- next-piece preview in the right column, under the best score
+  gfx.text("next", 344, 68, 6, 2)
+  gfx.rect(344, 88, 80, 60, 0, true)
+  gfx.rect(344, 88, 80, 60, 13, false)
+  drawMini(gfx, PIECES[nextIdx], 384, 118, 12)
 
   -- WHOOSH: the sweep is a celebrated fresh start, never a punishment
   if state == "sweep" then
-    local wx = 52 + math.floor(math.sin(t * 10) * 3)
-    gfx.text("whoosh!", wx, 60, 12, 2)
+    local wx = (240 - 7 * 6) + math.floor(math.sin(t * 10) * 6)
+    gfx.text("whoosh!", wx, 120, 12, 3)
   elseif state == "swept" then
-    gfx.rect(16, 78, 128, 84, 0, true)
-    gfx.rect(16, 78, 128, 84, 12, false)
-    gfx.text("whoosh!", 52, 86, 12, 2)
-    gfx.text("fresh board!", 56, 104, 7, 1)
+    gfx.rect(112, 76, 256, 168, 0, true)
+    gfx.rect(112, 76, 256, 168, 12, false)
+    gfx.text("whoosh!", 240 - 7 * 6, 92, 12, 3)
+    gfx.text("fresh board!", 192, 128, 7, 2)
     -- the run's score meets the best before it resets
-    gfx.text(tostring(score), 44, 122, 7, 2)
-    drawStarDot(gfx, 84, 127)
-    gfx.text(tostring(best), 92, 122, 10, 2)
+    gfx.text(tostring(score), 168, 160, 7, 3)
+    drawStarDot(gfx, 248, 170)
+    gfx.text(tostring(best), 264, 160, 10, 3)
     if bestBeaten and math.floor(t * 6) % 2 == 0 then
-      gfx.text("new best!", 44, 144, 10, 2)
+      gfx.text("new best!", 240 - 9 * 6, 204, 10, 3)
     end
   end
 
   -- milestone banner: every 10 lines of the run
   if milestoneT > 0 and state ~= "swept" then
-    gfx.rect(20, 56, 120, 30, 0, true)
-    gfx.rect(20, 56, 120, 30, 10, false)
+    gfx.rect(120, 52, 240, 60, 0, true)
+    gfx.rect(120, 52, 240, 60, 10, false)
     local msg = milestoneVal .. " lines!"
-    gfx.text(msg, 80 - #msg * 4, 65, 10, 2)
-    drawStarDot(gfx, 30, 71)
-    drawStarDot(gfx, 130, 71)
+    gfx.text(msg, 240 - #msg * 6, 74, 10, 3)
+    drawStarDot(gfx, 140, 82)
+    drawStarDot(gfx, 340, 82)
   end
 
   -- new-best banner: the record falling is a moment, not a number change
   if newBestT > 0 and state ~= "swept" and math.floor(t * 8) % 4 ~= 3 then
-    gfx.rect(20, 96, 120, 30, 0, true)
-    gfx.rect(20, 96, 120, 30, 9, false)
-    gfx.text("new best!", 44, 105, 10, 2)
-    drawStarDot(gfx, 30, 111)
-    drawStarDot(gfx, 130, 111)
+    gfx.rect(120, 132, 240, 60, 0, true)
+    gfx.rect(120, 132, 240, 60, 9, false)
+    gfx.text("new best!", 240 - 9 * 6, 154, 10, 3)
+    drawStarDot(gfx, 140, 162)
+    drawStarDot(gfx, 340, 162)
   end
 end
 `
@@ -5667,8 +5733,11 @@ var ENGINE_API = `
 # The Vupp engine
 
 An app is Lua 5.4 files plus a manifest. The device runs ONE app at a time in a
-fresh VM. The canvas is 160x240 (portrait), integer-scaled 2x to the panel \u2014 so
-every coordinate you write is in 0..159 x 0..239.
+fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel \u2014 every
+coordinate you write is in 0..479 x 0..319, and every canvas pixel is a real
+panel pixel. (Declared by "hires": true in app.json \u2014 always include it; without
+it the app gets the legacy 240x160 pixel-doubled canvas and every coordinate
+below would be wrong by 2x.)
 
 ## Lifecycle \u2014 define these as globals on the pre-existing \`vupp\` table
 
@@ -5698,9 +5767,9 @@ every coordinate you write is in 0..159 x 0..239.
 
   gfx.text is the one to get right. Each size has its OWN glyph set (4x6, 8x12,
   12x18), advance is 4*size px per character and line height 6*size px. Centre
-  a string with x = (160 - #str * 4 * size) / 2. "\\n" starts a new line.
-  Anything a CHILD reads wants size 2 at minimum, size 3 for early readers \u2014
-  size 1 is for debug text only.
+  a string with x = (480 - #str * 4 * size) / 2. "\\n" starts a new line.
+  On this canvas anything a CHILD reads wants size 3 (size 2 for secondary
+  labels); size 1 is a tiny 4x6 glyph, for debug text only.
 
   ASCII 32..127 ONLY. The font has no other glyphs and draws a literal "?" for
   every byte outside that range, so a star, an arrow, an accent or an emoji
@@ -5709,9 +5778,10 @@ every coordinate you write is in 0..159 x 0..239.
   heart. Draw those with gfx.circle / gfx.tri / gfx.rect instead.
 
   There are more calls (gfx.sprite, gfx.image, gfx.texcol, gfx.terrain,
-  gfx.floor, gfx.ssprite, ...) but they all need asset files, which this studio
-  cannot produce yet. Draw with the shape and text calls above. That is not a
-  handicap: many of the best apps in the Vupp library are shapes only.
+  gfx.floor, gfx.ssprite, gfx.mesh, ...) but they all need asset files, which
+  this studio cannot produce yet. Draw with the shape and text calls above.
+  That is not a handicap: many of the best apps in the Vupp library are shapes
+  only.
 
 ## Colors
 
@@ -5806,13 +5876,15 @@ var MANIFEST = `
       "capabilities": [],
       "palette": ["#101828", "#1d2b53", "#7e2553", "#008751", "#ffec27"],
       "min_engine": ${APP_ENGINE_VERSION},
+      "hires": true,
       "parent": { "version": 1, "documents": {}, "commands": {}, "events": {} }
     }
 
   Rules: keep "slug" exactly "draft" (the preview device installs it under that
   name). "category" is one of game | creative | music | learning. Add "touch"
   to "capabilities" ONLY if you call vupp.touch() \u2014 and if you do, make the
-  touch targets big, at least 40x40 canvas pixels. "palette" is optional; omit
+  touch targets big, at least 80x80 canvas pixels. Keep "hires": true \u2014 it is
+  what puts the app on the full-resolution canvas. "palette" is optional; omit
   it for the built-in 16, or list your own and use indices 0..n-1. Bump
   "version" whenever you change the app. Leave "parent" exactly as shown unless
   you emit events.
@@ -5836,8 +5908,8 @@ var SKELETON = `
 
     function vupp.draw(gfx)
       gfx.clear(1)
-      gfx.text("hello", 52, 100, 7, 2)
-      gfx.circle(80, 160, 10 + 4 * math.sin(t * 2), 11, true)
+      gfx.text("hello", 200, 120, 7, 3)
+      gfx.circle(240, 220, 20 + 8 * math.sin(t * 2), 11, true)
     end
 `.trim();
 
@@ -6169,7 +6241,7 @@ var CSS = `
   #status.bad { color: #ff8f7a; }
   #screen-area {
     position: relative; background: #000; border-radius: 10px; overflow: hidden;
-    width: min(86vw, 320px); aspect-ratio: 320 / 480;
+    width: min(94vw, 560px); aspect-ratio: 480 / 320;
     display: flex; align-items: center; justify-content: center;
   }
   canvas { display: block; image-rendering: pixelated; touch-action: none; outline: none; }
@@ -6341,13 +6413,13 @@ for (const el of document.querySelectorAll('[data-btn]')) {
 }
 
 /* Touch on the screen itself \u2014 apps declaring the "touch" capability read this.
- * Coordinates are the 320x480 panel space the firmware expects. */
+ * Coordinates are the 480x320 panel space the firmware expects. */
 const screenCanvas = document.getElementById('canvas')
 function panelXY(e) {
   const r = screenCanvas.getBoundingClientRect()
   return {
-    x: Math.round(((e.clientX - r.left) / r.width) * 320),
-    y: Math.round(((e.clientY - r.top) / r.height) * 480),
+    x: Math.round(((e.clientX - r.left) / r.width) * 480),
+    y: Math.round(((e.clientY - r.top) / r.height) * 320),
   }
 }
 screenCanvas.addEventListener('pointerdown', (e) => {
@@ -6867,7 +6939,7 @@ var SimSession = class _SimSession {
           this.settle({
             ok: false,
             where: "blank",
-            error: "The app runs without crashing but the screen is a single flat colour \u2014 nothing is being drawn, or everything is being drawn outside the 160x240 canvas. Check the coordinates in vupp.draw."
+            error: "The app runs without crashing but the screen is a single flat colour \u2014 nothing is being drawn, or everything is being drawn outside the canvas (480x320 for hires apps). Check the coordinates in vupp.draw."
           });
           break;
         }
@@ -6981,7 +7053,7 @@ var SimSession = class _SimSession {
     });
     return result;
   }
-  /** One PNG of the 160x240 app canvas, base64, no data: prefix. */
+  /** One PNG of the app canvas (480x320 hires / 240x160 legacy), base64, no data: prefix. */
   async shot() {
     const shot = new Promise((resolve7, reject) => {
       const timeout = setTimeout(() => reject(new Error("the screenshot never arrived")), 1e4);

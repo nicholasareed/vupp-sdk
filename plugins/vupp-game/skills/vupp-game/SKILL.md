@@ -1,12 +1,12 @@
 ---
 name: vupp-game
-description: Build a game or toy for the Vupp kids' handheld — a 160x240 screen, a d-pad and A/B buttons, running Lua. Use when asked to make, change, or test a Vupp app or game. Covers the engine API, the reference apps, running it on the real firmware, playtesting it with real screenshots, and handing it to a parent to install.
+description: Build a game or toy for the Vupp kids' handheld — a 240x160 screen, a d-pad and A/B buttons, running Lua. Use when asked to make, change, or test a Vupp app or game. Covers the engine API, the reference apps, running it on the real firmware, playtesting it with real screenshots, and handing it to a parent to install.
 ---
 
 # Building a Vupp game
 
 The Vupp is a handheld for children roughly 3 to 8 years old. A game for it is
-Lua 5.4 plus a manifest, running on a 160x240 portrait screen with a d-pad,
+Lua 5.4 plus a manifest, running on a 240x160 landscape screen with a d-pad,
 A and B, and a speaker.
 
 You have a real simulator. It is not a mock — it is the device's own firmware
@@ -111,7 +111,7 @@ vupp run --json
   `main.lua`, engine too old).
 - `where: "init" | "update" | "draw"` — the app's own Lua error, verbatim.
 - `where: "blank"` — it ran and drew one flat colour. Almost always coordinates
-  outside the 160x240 canvas, or a draw that never happens.
+  outside the 240x160 canvas, or a draw that never happens.
 
 ### 5. Playtest — and actually look
 
@@ -132,7 +132,7 @@ Buttons: `up down left right a b select`. START never reaches the app — the
 engine owns it for the pause menu. Holds under 80 ms are invisible to the input
 poll and get raised to 80.
 
-It writes PNGs of the 160x240 canvas to `.vupp/frames/` and returns their
+It writes PNGs of the 240x160 canvas to `.vupp/frames/` and returns their
 paths. **Open every one of them and say what you actually see.** The numbers
 cannot tell you the score is drawn on top of the player. Every one of these has
 shipped to a real child before:
@@ -239,7 +239,7 @@ highlights:
   Each of init/update/draw must finish in 250 ms and ~3M Lua instructions;
   blowing either is a crash, not a slowdown.
 - **`gfx.text` sizes are separate glyph sets, not scales.** Advance is
-  `4 * size` px per character. Centre with `x = (160 - #str * 4 * size) / 2` —
+  `4 * size` px per character. Centre with `x = (240 - #str * 4 * size) / 2` —
   do the arithmetic, do not eyeball it. Anything a child reads wants size 2
   minimum.
 

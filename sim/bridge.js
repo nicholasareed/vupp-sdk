@@ -23,12 +23,18 @@
 
 'use strict'
 
-const CANVAS_W = 320
-const CANVAS_H = 480
+const CANVAS_W = 480
+const CANVAS_H = 320
 /* The indexed app canvas behind that panel — what vupp_sim_canvas_rgba hands
  * back, and the coordinate space every number in the app's Lua is written in. */
-const APP_W = 160
-const APP_H = 240
+/* Classic app canvas; engine v14 hires apps render 480x320 — appW()/appH()
+ * read the live size from the sim so shots track whichever app is running. */
+function appW() {
+  try { return Module.ccall('vupp_sim_canvas_w', 'number', [], []) } catch { return 240 }
+}
+function appH() {
+  try { return Module.ccall('vupp_sim_canvas_h', 'number', [], []) } catch { return 160 }
+}
 const DRAFT_SLUG = 'draft'
 const DRAFT_DIR = `/.sim/sd/apps/${DRAFT_SLUG}`
 
@@ -318,7 +324,7 @@ function watchCanvas(id, forMs, everyMs) {
  * toDataURL. That avoids shipping a PNG encoder, and it deliberately does NOT
  * read Module.canvas — that is a WebGL surface, so toDataURL on it needs
  * preserveDrawingBuffer and would capture the upscaled panel with its status
- * bar rather than the 160x240 the app's coordinates mean.
+ * bar rather than the 240x160 the app's coordinates mean.
  *
  * A shapes-only game lands around 3-8 KB, which is what makes it affordable to
  * send several frames per playtest. */
@@ -326,17 +332,18 @@ function watchCanvas(id, forMs, everyMs) {
 let shotCanvas = null
 
 function shotPngB64() {
-  if (!shotCanvas) {
+  const w = appW(), h = appH()
+  if (!shotCanvas || shotCanvas.width !== w || shotCanvas.height !== h) {
     shotCanvas = document.createElement('canvas')
-    shotCanvas.width = APP_W
-    shotCanvas.height = APP_H
+    shotCanvas.width = w
+    shotCanvas.height = h
   }
   const ptr = Module.ccall('vupp_sim_canvas_rgba', 'number', [], [])
   /* Re-read HEAPU8 every time: ALLOW_MEMORY_GROWTH detaches the old view when
    * the heap grows, and a stale one throws or reads garbage. */
-  const bytes = Module.HEAPU8.subarray(ptr, ptr + APP_W * APP_H * 4)
+  const bytes = Module.HEAPU8.subarray(ptr, ptr + w * h * 4)
   const ctx = shotCanvas.getContext('2d')
-  const img = ctx.createImageData(APP_W, APP_H)
+  const img = ctx.createImageData(w, h)
   img.data.set(bytes)
   ctx.putImageData(img, 0, 0)
   return shotCanvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '')
@@ -465,10 +472,10 @@ const handlers = {
   /* Answers with one `canvas` message after sampling for msg.for_ms. */
   watch_canvas: (msg) => watchCanvas(msg.id, msg.for_ms || 2000, msg.every_ms || 250),
 
-  /* One PNG of the 160x240 app canvas, right now. */
+  /* One PNG of the 240x160 app canvas, right now. */
   shot: (msg) => {
     if (!booted) return fail(msg.id, 'not booted')
-    send({ type: 'shot', id: msg.id, w: APP_W, h: APP_H, png_b64: shotPngB64() })
+    send({ type: 'shot', id: msg.id, w: appW(), h: appH(), png_b64: shotPngB64() })
   },
 
   /* Walk a scripted input sequence and report what happened, with frames.

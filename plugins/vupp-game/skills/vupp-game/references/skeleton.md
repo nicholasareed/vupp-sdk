@@ -19,6 +19,6 @@
 
     function vupp.draw(gfx)
       gfx.clear(1)
-      gfx.text("hello", 52, 100, 7, 2)
-      gfx.circle(80, 160, 10 + 4 * math.sin(t * 2), 11, true)
+      gfx.text("hello", 200, 120, 7, 3)
+      gfx.circle(240, 220, 20 + 8 * math.sin(t * 2), 11, true)
     end
