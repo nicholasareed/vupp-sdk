@@ -84,8 +84,17 @@ function fitCanvas() {
   canvas.style.width = `${Math.round(CANVAS_W * scale)}px`;
   canvas.style.height = `${Math.round(CANVAS_H * scale)}px`;
 }
-window.addEventListener('resize', fitCanvas);
-window.addEventListener('orientationchange', fitCanvas);
+/* Rotation fires resize before the orientation media query has re-laid the
+ * page out, so a single synchronous fit sizes the canvas against stale
+ * geometry (canvas overflowing the shell after landscape->portrait).
+ * Fit now AND after layout settles. */
+function fitCanvasSettled() {
+  fitCanvas();
+  requestAnimationFrame(fitCanvas);
+  setTimeout(fitCanvas, 150);
+}
+window.addEventListener('resize', fitCanvasSettled);
+window.addEventListener('orientationchange', fitCanvasSettled);
 fitCanvas();
 
 /* --- on-screen pad --------------------------------------------------------- */
@@ -157,7 +166,7 @@ dpad.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (dpadPointer !== null) return; /* one finger drives the dpad */
   dpadPointer = e.pointerId;
-  dpad.setPointerCapture(e.pointerId);
+  try { dpad.setPointerCapture(e.pointerId); } catch (err) {} /* released mid-press */
   dpadDownAt = performance.now();
   setDpadBits(dpadDirOf(e));
   unlockAudio();
@@ -192,7 +201,7 @@ for (const btn of document.querySelectorAll('button[data-bit]:not(.pad-btn)')) {
 
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    btn.setPointerCapture(e.pointerId);
+    try { btn.setPointerCapture(e.pointerId); } catch (err) {} /* released mid-press */
     btn.classList.add('held');
     downAt = performance.now();
     padMask |= bit;
@@ -275,7 +284,7 @@ Module.canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (screenPointerId !== null) return; /* one screen finger at a time */
   screenPointerId = e.pointerId;
-  Module.canvas.setPointerCapture(e.pointerId);
+  try { Module.canvas.setPointerCapture(e.pointerId); } catch (err) {} /* released mid-press */
   touchDownAt = performance.now();
   const p = canvasPoint(e);
   sendTouch(p.x, p.y, 1);

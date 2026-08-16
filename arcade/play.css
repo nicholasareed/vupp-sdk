@@ -160,6 +160,41 @@ button.held {
   #deck { padding: 6px 12px 10px; }
 }
 
+/* phone landscape: controls flank the screen — dpad left, A/B right,
+ * select/start tucked under the screen. The height guard keeps desktop
+ * windows (which are landscape too, but tall) on the portrait stack.
+ * display:contents promotes the deck's three clusters to #shell flex
+ * items so pure CSS reorders them around the screen. */
+@media (orientation: landscape) and (max-height: 520px) {
+  #shell {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-evenly;
+    padding: 0 max(10px, env(safe-area-inset-right))
+             0 max(10px, env(safe-area-inset-left));
+  }
+  #deck { display: contents; }
+  #dpad { order: 1; }
+  #screen-area {
+    order: 2;
+    align-self: flex-start;
+    width: min(58vw, calc((100dvh - 48px) * 1.5));
+    max-height: none;
+    padding: 6px;
+  }
+  #ab-btns { order: 3; }
+  #meta-btns {
+    position: fixed;
+    left: 50%;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    flex-direction: row;
+    gap: 18px;
+    z-index: 5;
+  }
+  .pill-btn { padding: 6px 14px; font-size: 11px; }
+}
+
 /* --- loading splash -------------------------------------------------------- */
 
 #loading {
