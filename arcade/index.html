@@ -19,18 +19,34 @@
     <div class="loading-sub">warming up…</div>
   </div>
 
+  <!-- Landscape only: the device panel is 480x320, and portrait leaves no
+       room for the screen plus the controls. Pure CSS (media query) so it
+       is correct before any script runs. -->
+  <div id="rotate-gate">
+    <div class="rotate-phone" aria-hidden="true"></div>
+    <div class="rotate-title">Rotate your phone</div>
+    <div class="rotate-sub">Vupp Play needs landscape</div>
+  </div>
+
   <div id="shell">
     <div id="screen-area">
       <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
     </div>
 
     <div id="deck">
+      <!-- The dpad is one 8-way surface (play.js): the arrows and the corner
+           wedges are indicators, not buttons. The wedges advertise that
+           diagonals exist and light up when two directions are held. -->
       <div id="dpad">
+        <div class="pad-diag" id="diag-nw"><span>&#8598;</span></div>
         <button class="pad-btn" id="btn-up"    data-bit="1"><span>&#9650;</span></button>
+        <div class="pad-diag" id="diag-ne"><span>&#8599;</span></div>
         <button class="pad-btn" id="btn-left"  data-bit="4"><span>&#9664;</span></button>
         <button class="pad-btn" id="btn-mid" disabled></button>
         <button class="pad-btn" id="btn-right" data-bit="8"><span>&#9654;</span></button>
+        <div class="pad-diag" id="diag-sw"><span>&#8601;</span></div>
         <button class="pad-btn" id="btn-down"  data-bit="2"><span>&#9660;</span></button>
+        <div class="pad-diag" id="diag-se"><span>&#8600;</span></div>
       </div>
       <div id="meta-btns">
         <button class="pill-btn" data-bit="128">select</button>

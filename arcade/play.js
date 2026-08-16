@@ -138,6 +138,14 @@ const dpadArrows = {
   [DPAD_LEFT]: document.getElementById('btn-left'),
   [DPAD_RIGHT]: document.getElementById('btn-right'),
 };
+/* corner wedges: lit only while BOTH of their directions are held, so a
+ * diagonal is visibly a diagonal and not a mystery */
+const dpadDiags = [
+  [DPAD_UP | DPAD_LEFT, document.getElementById('diag-nw')],
+  [DPAD_UP | DPAD_RIGHT, document.getElementById('diag-ne')],
+  [DPAD_DOWN | DPAD_LEFT, document.getElementById('diag-sw')],
+  [DPAD_DOWN | DPAD_RIGHT, document.getElementById('diag-se')],
+];
 let dpadPointer = null;
 let dpadDownAt = 0;
 
@@ -159,6 +167,9 @@ function setDpadBits(bits) {
   sendPad();
   for (const [bit, el] of Object.entries(dpadArrows)) {
     el.classList.toggle('held', (bits & bit) !== 0);
+  }
+  for (const [pair, el] of dpadDiags) {
+    el.classList.toggle('held', (bits & pair) === pair);
   }
 }
 

@@ -87,16 +87,17 @@ button.held {
   grid-template-columns: 62px 62px 62px;
   grid-template-rows: 62px 62px 62px;
   grid-template-areas:
-    ".    up    ."
+    "nw   up    ne"
     "left mid   right"
-    ".    down  .";
+    "sw   down  se";
   touch-action: none; /* the container IS the input surface (8-way drag) */
 }
 
-/* The arrows are indicators now, not buttons: all pointer events land on
- * #dpad, which maps the finger's angle to a direction — so dragging across
- * the pad (and into the corners, for diagonals) just works. */
-#dpad .pad-btn {
+/* The arrows and corner wedges are indicators, not buttons: all pointer
+ * events land on #dpad, which maps the finger's angle to a direction — so
+ * dragging across the pad (and into the corners, for diagonals) works. */
+#dpad .pad-btn,
+#dpad .pad-diag {
   pointer-events: none;
 }
 
@@ -110,6 +111,33 @@ button.held {
   font-size: 18px;
   opacity: 0.75;
 }
+
+/* diagonal corners: dim by default so the 8-way pad is discoverable, lit
+ * when both of their directions are held */
+.pad-diag {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1c1c22;
+  color: #e8e8ee;
+  font-size: 15px;
+  transition: background 0.06s linear, opacity 0.06s linear;
+  opacity: 0.5;
+}
+
+.pad-diag span { opacity: 0.55; }
+
+.pad-diag.held {
+  background: #4a4a58;
+  opacity: 1;
+}
+
+.pad-diag.held span { opacity: 1; }
+
+#diag-nw { grid-area: nw; border-radius: 12px 0 0 0; }
+#diag-ne { grid-area: ne; border-radius: 0 12px 0 0; }
+#diag-sw { grid-area: sw; border-radius: 0 0 0 12px; }
+#diag-se { grid-area: se; border-radius: 0 0 12px 0; }
 
 /* start/select pills */
 #meta-btns {
@@ -193,6 +221,72 @@ button.held {
     z-index: 5;
   }
   .pill-btn { padding: 6px 14px; font-size: 11px; }
+}
+
+/* --- rotate gate: landscape required --------------------------------------- */
+/* Phone-sized portrait viewports only — a desktop window that happens to be
+ * taller than wide keeps the normal layout. */
+
+#rotate-gate {
+  display: none;
+}
+
+@media (orientation: portrait) and (max-width: 820px) {
+  #rotate-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: #101014;
+    text-align: center;
+    padding: 24px;
+  }
+}
+
+/* a little phone that tips into landscape, forever */
+.rotate-phone {
+  width: 54px;
+  height: 92px;
+  border: 3px solid #e8e8ee;
+  border-radius: 12px;
+  margin-bottom: 14px;
+  animation: tip 2.4s ease-in-out infinite;
+}
+
+.rotate-phone::after { /* the home line */
+  content: "";
+  display: block;
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+  background: #e8e8ee;
+  margin: 76px auto 0;
+  opacity: 0.6;
+}
+
+@keyframes tip {
+  0%, 28%   { transform: rotate(0deg); }
+  55%, 88%  { transform: rotate(-90deg); }
+  100%      { transform: rotate(0deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rotate-phone { animation: none; transform: rotate(-90deg); }
+}
+
+.rotate-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.rotate-sub {
+  font-size: 14px;
+  opacity: 0.6;
 }
 
 /* --- loading splash -------------------------------------------------------- */
