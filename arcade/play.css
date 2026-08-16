@@ -90,6 +90,14 @@ button.held {
     ".    up    ."
     "left mid   right"
     ".    down  .";
+  touch-action: none; /* the container IS the input surface (8-way drag) */
+}
+
+/* The arrows are indicators now, not buttons: all pointer events land on
+ * #dpad, which maps the finger's angle to a direction — so dragging across
+ * the pad (and into the corners, for diagonals) just works. */
+#dpad .pad-btn {
+  pointer-events: none;
 }
 
 #btn-up    { grid-area: up;    border-radius: 12px 12px 0 0; }

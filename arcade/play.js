@@ -1,11 +1,17 @@
 /* Vupp Play shell — configures the Emscripten Module before vupp_sim.js
  * loads, sizes the screen, and drives the on-screen pad.
  *
- * Input path: each on-screen button owns one bit of the device pad bitmask
+ * Input path: on-screen controls own bits of the device pad bitmask
  * (VUPP_PAD_* in firmware/vupp/components/board/include/vupp_board.h). The
  * combined mask is pushed through vupp_board_sim_inject_pad(), the same
  * entry point --script uses, so touch input is indistinguishable from real
- * keys. Per-button pointer events keep multi-touch working (dpad + A). */
+ * keys.
+ *
+ * The dpad is ONE analog surface, not four buttons: the finger's angle from
+ * the pad centre picks one of 8 directions (diagonals = two bits), tracked
+ * continuously while dragging — sliding from up to up-right to right rolls
+ * through the directions without ever lifting. A/B/start/select stay
+ * per-button so multi-touch (dpad + A) keeps working. */
 
 'use strict';
 
@@ -101,7 +107,86 @@ function unlockAudio() {
   }
 }
 
-for (const btn of document.querySelectorAll('button[data-bit]')) {
+/* --- the dpad: one 8-way analog surface ------------------------------------ */
+
+const DPAD_UP = 1, DPAD_DOWN = 2, DPAD_LEFT = 4, DPAD_RIGHT = 8;
+const DPAD_BITS = DPAD_UP | DPAD_DOWN | DPAD_LEFT | DPAD_RIGHT;
+/* octant -> bits, counter-clockwise from East (atan2 y-up) */
+const DPAD_OCTANTS = [
+  DPAD_RIGHT,             /* E  */
+  DPAD_UP | DPAD_RIGHT,   /* NE */
+  DPAD_UP,                /* N  */
+  DPAD_UP | DPAD_LEFT,    /* NW */
+  DPAD_LEFT,              /* W  */
+  DPAD_DOWN | DPAD_LEFT,  /* SW */
+  DPAD_DOWN,              /* S  */
+  DPAD_DOWN | DPAD_RIGHT, /* SE */
+];
+const dpad = document.getElementById('dpad');
+const dpadArrows = {
+  [DPAD_UP]: document.getElementById('btn-up'),
+  [DPAD_DOWN]: document.getElementById('btn-down'),
+  [DPAD_LEFT]: document.getElementById('btn-left'),
+  [DPAD_RIGHT]: document.getElementById('btn-right'),
+};
+let dpadPointer = null;
+let dpadDownAt = 0;
+
+function dpadDirOf(e) {
+  const r = dpad.getBoundingClientRect();
+  const dx = e.clientX - (r.left + r.width / 2);
+  const dy = e.clientY - (r.top + r.height / 2);
+  if (Math.hypot(dx, dy) < Math.min(r.width, r.height) * 0.09) {
+    return 0; /* centre deadzone */
+  }
+  const oct = Math.round(Math.atan2(-dy, dx) / (Math.PI / 4)) & 7;
+  return DPAD_OCTANTS[oct];
+}
+
+function setDpadBits(bits) {
+  const next = (padMask & ~DPAD_BITS) | bits;
+  if (next === padMask) return;
+  padMask = next;
+  sendPad();
+  for (const [bit, el] of Object.entries(dpadArrows)) {
+    el.classList.toggle('held', (bits & bit) !== 0);
+  }
+}
+
+dpad.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (dpadPointer !== null) return; /* one finger drives the dpad */
+  dpadPointer = e.pointerId;
+  dpad.setPointerCapture(e.pointerId);
+  dpadDownAt = performance.now();
+  setDpadBits(dpadDirOf(e));
+  unlockAudio();
+});
+dpad.addEventListener('pointermove', (e) => {
+  if (e.pointerId !== dpadPointer) return;
+  e.preventDefault();
+  setDpadBits(dpadDirOf(e)); /* whatever is under the finger, no re-press */
+});
+for (const ev of ['pointerup', 'pointercancel']) {
+  dpad.addEventListener(ev, (e) => {
+    if (e.pointerId !== dpadPointer) return;
+    e.preventDefault();
+    dpadPointer = null;
+    /* the sim polls the pad every ~30ms; keep even the quickest tap
+     * observable for at least 80ms before clearing */
+    const elapsed = performance.now() - dpadDownAt;
+    if (elapsed < 80) {
+      setTimeout(() => { if (dpadPointer === null) setDpadBits(0); }, 80 - elapsed);
+    } else {
+      setDpadBits(0);
+    }
+  });
+}
+dpad.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/* --- A / B / start / select: plain per-button presses ---------------------- */
+
+for (const btn of document.querySelectorAll('button[data-bit]:not(.pad-btn)')) {
   const bit = Number(btn.dataset.bit);
   let downAt = 0;
 
@@ -139,6 +224,7 @@ for (const btn of document.querySelectorAll('button[data-bit]')) {
 
 /* Never leave a phantom button held when the page loses focus mid-press. */
 function releaseAll() {
+  dpadPointer = null;
   if (padMask !== 0) {
     padMask = 0;
     sendPad();
