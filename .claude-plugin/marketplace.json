@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Build and playtest games for the Vupp kids' handheld",
-    "version": "0.3.5"
+    "version": "0.3.6"
   },
   "plugins": [
     {
       "name": "vupp-game",
       "source": "./plugins/vupp-game",
       "description": "Write a Lua game for a Vupp handheld, run it on the real firmware, press the buttons, look at the screen, and hand the result to a parent.",
-      "version": "0.3.5"
+      "version": "0.3.6"
     }
   ]
 }

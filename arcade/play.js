@@ -94,8 +94,47 @@ function fitCanvasSettled() {
   setTimeout(fitCanvas, 150);
 }
 window.addEventListener('resize', fitCanvasSettled);
-window.addEventListener('orientationchange', fitCanvasSettled);
 fitCanvas();
+
+/* A real portrait<->landscape flip rearranges the whole shell (the deck's
+ * clusters move around the screen, the rotate gate comes and goes) and mobile
+ * browsers hand out stale viewport metrics while that happens — refitting the
+ * canvas is not enough to land reliably on the other side. Reload instead:
+ * saves live in IndexedDB, so the game comes back where it was. Ordinary
+ * resizes (URL bar collapsing, a desktop window drag) keep the cheap refit. */
+const portraitMQ = window.matchMedia('(orientation: portrait)');
+let wasPortrait = portraitMQ.matches;
+
+function reloadOnOrientationFlip() {
+  if (portraitMQ.matches === wasPortrait) return;
+  wasPortrait = portraitMQ.matches;
+  /* let IDBFS commit the current save first, but never hang on it */
+  let reloaded = false;
+  const go = () => {
+    if (reloaded) return;
+    reloaded = true;
+    location.reload();
+  };
+  try {
+    if (Module.calledRun && Module.FS) {
+      Module.FS.syncfs(false, go);
+      setTimeout(go, 300);
+    } else {
+      go();
+    }
+  } catch (e) {
+    go();
+  }
+}
+if (portraitMQ.addEventListener) {
+  portraitMQ.addEventListener('change', reloadOnOrientationFlip);
+} else {
+  portraitMQ.addListener(reloadOnOrientationFlip); /* older iOS Safari */
+}
+/* Some browsers fire orientationchange without a matchMedia change event. */
+window.addEventListener('orientationchange', () => {
+  setTimeout(reloadOnOrientationFlip, 100);
+});
 
 /* --- on-screen pad --------------------------------------------------------- */
 
