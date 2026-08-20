@@ -11,11 +11,12 @@ Each size is its OWN glyph set, not a scale: 4x6, 8x12, 12x18 pixels.
     size 2: advance 8px/char,  line height 12px
     size 3: advance 12px/char, line height 18px
 
-Centring: x = (160 - #str * 4 * size) / 2. Do the arithmetic; do not eyeball
-it. A 10-character string at size 2 is 80px wide, so it starts at x = 40.
+Centring: x = (480 - #str * 4 * size) / 2 on the 480x320 hires canvas, or use
+gfx.w so it is right either way. Do the arithmetic; do not eyeball it. A
+10-character string at size 3 is 120px wide, so it starts at x = 180.
 
-Anything a CHILD reads wants size 2 minimum, size 3 for early readers. Size 1
-is debug text — at 4x6 on a 3.5" panel it is genuinely unreadable to a
+Anything a CHILD reads wants size 3, with size 2 for secondary labels. Size 1
+is debug text: at 4x6 on a 3.5" panel it is genuinely unreadable to a
 five-year-old.
 
 ASCII 32..127 ONLY. Every other byte draws as a literal "?", so a star renders
@@ -24,5 +25,5 @@ most tempting: score badges, hearts, arrows, accented names. Draw those with
 gfx.circle / gfx.tri / gfx.rect.
 
 Text placement is the single most common thing a playtest screenshot catches:
-a score drawn at y=0 sits under nothing, but a score drawn at x=140 runs off
-the 160px canvas and simply vanishes mid-word.
+a score drawn at y=0 sits under nothing, but a score drawn at x=440 runs off
+the 480px canvas and simply vanishes mid-word.

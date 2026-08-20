@@ -13,7 +13,7 @@ CRASH, not a slowdown.
     mutate them. This is the number one cause of a game that runs fine for
     thirty seconds and then stutters.
   - Never write "while true do" without a bounded exit.
-  - Target 30 fps. Keep total Lua under ~1500 lines — small and finished beats
+  - Target 30 fps. Keep total Lua under ~1500 lines, small and finished beats
     big and broken.
 
 A concrete one that catches people: building a display string every frame

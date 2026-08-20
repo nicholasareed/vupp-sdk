@@ -7,7 +7,7 @@
     vupp.store.get(key, default)
 
 Survives closing the app. Use it for a high score or the furthest level. Keep
-it small — this is a save file, not a database. It also survives an edit, so
+it small: this is a save file, not a database. It also survives an edit, so
 if you are testing a "best score" the old one is still there; that is what the
 creator's "start over" button clears.
 
@@ -15,7 +15,7 @@ creator's "start over" button clears.
     vupp.rand(n)   -- integer 1..n; no args gives a float in [0,1)
 
 vupp.rand is seeded per run, so a bug you hit reproduces on the next launch.
-math.random works but does not have that property — prefer vupp.rand.
+math.random works but does not have that property, prefer vupp.rand.
 
     vupp.emit(name, payload)  -- a note for the parent's activity feed
 

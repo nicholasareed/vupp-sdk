@@ -19,8 +19,8 @@
 
   Rules: keep "slug" exactly "draft" (the preview device installs it under that
   name). "category" is one of game | creative | music | learning. Add "touch"
-  to "capabilities" ONLY if you call vupp.touch() — and if you do, make the
-  touch targets big, at least 80x80 canvas pixels. Keep "hires": true — it is
+  to "capabilities" ONLY if you call vupp.touch(), and if you do, make the
+  touch targets big, at least 80x80 canvas pixels. Keep "hires": true, which is
   what puts the app on the full-resolution canvas. "palette" is optional; omit
   it for the built-in 16, or list your own and use indices 0..n-1. Bump
   "version" whenever you change the app. Leave "parent" exactly as shown unless

@@ -6,7 +6,7 @@
   - Each of init/update/draw must finish in 250 ms wall clock and ~3 million
     Lua instructions. Blowing either is a crash, not a slowdown.
   - 2 MB of Lua heap for everything.
-  - Target 30 fps. Do NOT allocate inside vupp.draw — no table constructors,
+  - Target 30 fps. Do NOT allocate inside vupp.draw, no table constructors,
     no string concatenation, no closures per frame. Build tables once in
     vupp.init and mutate them.
   - Never write "while true do" without a bounded exit.

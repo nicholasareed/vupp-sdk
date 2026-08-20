@@ -1,4 +1,4 @@
-/* Vupp Play shell — mobile-first, held portrait, with the landscape device
+/* Vupp Play shell, mobile-first, held portrait, with the landscape device
  * screen up top and the controls below. The sim renders into #canvas at a
  * fixed 480x320 backing store; we only stretch it with CSS (integer scale
  * when room allows, fractional shrink on narrow screens) so SDL's pointer
@@ -94,18 +94,34 @@ button.held {
 }
 
 /* The arrows and corner wedges are indicators, not buttons: all pointer
- * events land on #dpad, which maps the finger's angle to a direction — so
+ * events land on #dpad, which maps the finger's angle to a direction, so
  * dragging across the pad (and into the corners, for diagonals) works. */
 #dpad .pad-btn,
 #dpad .pad-diag {
   pointer-events: none;
 }
 
-#btn-up    { grid-area: up;    border-radius: 12px 12px 0 0; }
-#btn-down  { grid-area: down;  border-radius: 0 0 12px 12px; }
-#btn-left  { grid-area: left;  border-radius: 12px 0 0 12px; }
-#btn-right { grid-area: right; border-radius: 0 12px 12px 0; }
-#btn-mid   { grid-area: mid;   background: #26262e; cursor: default; }
+#btn-up {
+  grid-area: up;
+  border-radius: 12px 12px 0 0;
+}
+#btn-down {
+  grid-area: down;
+  border-radius: 0 0 12px 12px;
+}
+#btn-left {
+  grid-area: left;
+  border-radius: 12px 0 0 12px;
+}
+#btn-right {
+  grid-area: right;
+  border-radius: 0 12px 12px 0;
+}
+#btn-mid {
+  grid-area: mid;
+  background: #26262e;
+  cursor: default;
+}
 
 .pad-btn span {
   font-size: 18px;
@@ -121,23 +137,41 @@ button.held {
   background: #1c1c22;
   color: #e8e8ee;
   font-size: 15px;
-  transition: background 0.06s linear, opacity 0.06s linear;
+  transition:
+    background 0.06s linear,
+    opacity 0.06s linear;
   opacity: 0.5;
 }
 
-.pad-diag span { opacity: 0.55; }
+.pad-diag span {
+  opacity: 0.55;
+}
 
 .pad-diag.held {
   background: #4a4a58;
   opacity: 1;
 }
 
-.pad-diag.held span { opacity: 1; }
+.pad-diag.held span {
+  opacity: 1;
+}
 
-#diag-nw { grid-area: nw; border-radius: 12px 0 0 0; }
-#diag-ne { grid-area: ne; border-radius: 0 12px 0 0; }
-#diag-sw { grid-area: sw; border-radius: 0 0 0 12px; }
-#diag-se { grid-area: se; border-radius: 0 0 12px 0; }
+#diag-nw {
+  grid-area: nw;
+  border-radius: 12px 0 0 0;
+}
+#diag-ne {
+  grid-area: ne;
+  border-radius: 0 12px 0 0;
+}
+#diag-sw {
+  grid-area: sw;
+  border-radius: 0 0 0 12px;
+}
+#diag-se {
+  grid-area: se;
+  border-radius: 0 0 12px 0;
+}
 
 /* start/select pills */
 #meta-btns {
@@ -172,10 +206,20 @@ button.held {
   font-weight: 700;
 }
 
-#btn-a { background: #2e4b8f; }
-#btn-b { background: #8f2e4b; }
-#btn-a:active, #btn-a.held { background: #4468bd; }
-#btn-b:active, #btn-b.held { background: #bd4468; }
+#btn-a {
+  background: #2e4b8f;
+}
+#btn-b {
+  background: #8f2e4b;
+}
+#btn-a:active,
+#btn-a.held {
+  background: #4468bd;
+}
+#btn-b:active,
+#btn-b.held {
+  background: #bd4468;
+}
 
 /* compact phones: the landscape screen is short, so only genuinely squat
  * viewports need the deck shrunk to keep everything on screen */
@@ -184,11 +228,16 @@ button.held {
     grid-template-columns: 48px 48px 48px;
     grid-template-rows: 48px 48px 48px;
   }
-  .round-btn { width: 56px; height: 56px; }
-  #deck { padding: 6px 12px 10px; }
+  .round-btn {
+    width: 56px;
+    height: 56px;
+  }
+  #deck {
+    padding: 6px 12px 10px;
+  }
 }
 
-/* phone landscape: controls flank the screen — dpad left, A/B right,
+/* phone landscape: controls flank the screen, dpad left, A/B right,
  * select/start tucked under the screen. The height guard keeps desktop
  * windows (which are landscape too, but tall) on the portrait stack.
  * display:contents promotes the deck's three clusters to #shell flex
@@ -198,11 +247,14 @@ button.held {
     flex-direction: row;
     align-items: center;
     justify-content: space-evenly;
-    padding: 0 max(10px, env(safe-area-inset-right))
-             0 max(10px, env(safe-area-inset-left));
+    padding: 0 max(10px, env(safe-area-inset-right)) 0 max(10px, env(safe-area-inset-left));
   }
-  #deck { display: contents; }
-  #dpad { order: 1; }
+  #deck {
+    display: contents;
+  }
+  #dpad {
+    order: 1;
+  }
   #screen-area {
     order: 2;
     align-self: flex-start;
@@ -210,7 +262,9 @@ button.held {
     max-height: none;
     padding: 6px;
   }
-  #ab-btns { order: 3; }
+  #ab-btns {
+    order: 3;
+  }
   #meta-btns {
     position: fixed;
     left: 50%;
@@ -220,11 +274,14 @@ button.held {
     gap: 18px;
     z-index: 5;
   }
-  .pill-btn { padding: 6px 14px; font-size: 11px; }
+  .pill-btn {
+    padding: 6px 14px;
+    font-size: 11px;
+  }
 }
 
 /* --- rotate gate: landscape required --------------------------------------- */
-/* Phone-sized portrait viewports only — a desktop window that happens to be
+/* Phone-sized portrait viewports only, a desktop window that happens to be
  * taller than wide keeps the normal layout. */
 
 #rotate-gate {
@@ -257,7 +314,8 @@ button.held {
   animation: tip 2.4s ease-in-out infinite;
 }
 
-.rotate-phone::after { /* the home line */
+.rotate-phone::after {
+  /* the home line */
   content: "";
   display: block;
   width: 20px;
@@ -269,13 +327,24 @@ button.held {
 }
 
 @keyframes tip {
-  0%, 28%   { transform: rotate(0deg); }
-  55%, 88%  { transform: rotate(-90deg); }
-  100%      { transform: rotate(0deg); }
+  0%,
+  28% {
+    transform: rotate(0deg);
+  }
+  55%,
+  88% {
+    transform: rotate(-90deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rotate-phone { animation: none; transform: rotate(-90deg); }
+  .rotate-phone {
+    animation: none;
+    transform: rotate(-90deg);
+  }
 }
 
 .rotate-title {

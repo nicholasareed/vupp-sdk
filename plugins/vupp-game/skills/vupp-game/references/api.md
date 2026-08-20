@@ -4,13 +4,13 @@
 # The Vupp engine
 
 An app is Lua 5.4 files plus a manifest. The device runs ONE app at a time in a
-fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel — every
+fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel, every
 coordinate you write is in 0..479 x 0..319, and every canvas pixel is a real
-panel pixel. (Declared by "hires": true in app.json — always include it; without
+panel pixel. (Declared by "hires": true in app.json, always include it; without
 it the app gets the legacy 240x160 pixel-doubled canvas and every coordinate
 below would be wrong by 2x.)
 
-## Lifecycle — define these as globals on the pre-existing `vupp` table
+## Lifecycle: define these as globals on the pre-existing `vupp` table
 
     function vupp.init()        -- once, before the first frame
     function vupp.update(dt)    -- every frame; dt is seconds since the last one
@@ -22,12 +22,12 @@ below would be wrong by 2x.)
     vupp.btn(b)   -- held right now?
     vupp.btnp(b)  -- pressed on THIS frame? (use for jumps, menu moves, firing)
     b is one of: "up" "down" "left" "right" "a" "b" "select"
-    "start" NEVER reaches the app — the engine owns it for the pause menu.
+    "start" NEVER reaches the app. The engine owns it for the pause menu.
 
     vupp.touch()  -- nil, or {x=, y=, held=} in canvas coordinates.
                   -- ONLY works if app.json capabilities includes "touch".
 
-## Drawing — all on the gfx passed to vupp.draw
+## Drawing: all on the gfx passed to vupp.draw
 
     gfx.clear(color)
     gfx.rect(x, y, w, h, color [, filled])      -- filled defaults to false
@@ -44,15 +44,21 @@ below would be wrong by 2x.)
 
   ASCII 32..127 ONLY. The font has no other glyphs and draws a literal "?" for
   every byte outside that range, so a star, an arrow, an accent or an emoji
-  comes out as visible garbage — "★ 70" renders as "?70?" because the star is
+  comes out as visible garbage, "★ 70" renders as "?70?" because the star is
   three bytes. This is easy to forget when reaching for a score badge or a
   heart. Draw those with gfx.circle / gfx.tri / gfx.rect instead.
 
-  There are more calls (gfx.sprite, gfx.image, gfx.texcol, gfx.terrain,
-  gfx.floor, gfx.ssprite, gfx.mesh, ...) but they all need asset files, which
-  this studio cannot produce yet. Draw with the shape and text calls above.
-  That is not a handicap: many of the best apps in the Vupp library are shapes
-  only.
+  Some calls DO need asset files you cannot produce here, and they draw
+  nothing rather than failing: gfx.sprite, gfx.image, gfx.ssprite, gfx.texcol,
+  gfx.tload, gfx.terrain, gfx.floor.
+
+  But two whole 3D engines need no files at all, and both are worth reaching
+  for when the idea is spatial rather than flat:
+    - BLOCK WORLDS: gfx.vworld / gfx.vfill / gfx.vterrain / gfx.vdraw and the
+      rest of gfx.v*. A byte-per-cell grid, meshed and drawn in C.
+    - MESHES: gfx.mload with a model TABLE (not a filename), then gfx.mcam
+      and gfx.mesh. One call draws a whole model.
+  Read the "blocks" and "meshes" reference topics before using either.
 
 ## Colors
 
@@ -68,13 +74,13 @@ Colors are PALETTE INDICES (integers), not hex. The default 16-color palette:
 
       "palette": ["#0f1020", "#1d2b53", "#7e2553", ..., "#ffccaa"]
 
-  Index 0 is the one to choose deliberately — gfx.clear(0) is the sky, the
+  Index 0 is the one to choose deliberately, gfx.clear(0) is the sky, the
   water, the room the game happens in. A hand-picked palette of 20-40 colors is
   the single biggest thing separating a game that looks made from one that
   looks default, and it costs nothing but JSON. Pick shades that go together:
   a few darks for outlines, a mid range for surfaces, two or three bright
   accents for the thing the child is meant to look at. Never index past the end
-  of your own array — that draws nothing at all.
+  of your own array: that draws nothing at all.
 
 ## Sound
 
@@ -82,7 +88,7 @@ Colors are PALETTE INDICES (integers), not hex. The default 16-color palette:
       freq 20..8000 Hz, ms 1..5000, vol 0..1,
       wave "tri" (default, soft) | "sine" | "square" | "saw" | "noise"
 
-  Sound is how a game feels alive — a blip on every input, a rising pair of
+  Sound is how a game feels alive: a blip on every input, a rising pair of
   tones on success, a soft low tone on a miss. Use it. (vupp.sfx needs asset
   files, so it is unavailable here.)
 

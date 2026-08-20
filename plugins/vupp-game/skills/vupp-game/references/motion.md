@@ -5,7 +5,7 @@
 
 The rule the whole product hangs on: something must move and respond on the
 very first frame, before any input. A still screen reads as broken to a
-five-year-old — they will not press anything to find out.
+five-year-old, who will not press anything to find out.
 
 Cheap motion that always works:
   - A bob: y = base + 3 * math.sin(t * 2)

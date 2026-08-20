@@ -1,0 +1,2174 @@
+{
+  "engineVersion": 17,
+  "source": "firmware/vupp/components/apprt/vupp_apprt_api.c",
+  "calls": [
+    {
+      "name": "gfx.circle",
+      "namespace": "gfx",
+      "short": "circle",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.circle(x, y, r, color [, filled])"
+        }
+      ],
+      "prose": "(x,y) is the CENTRE, not a corner\nlike gfx.rect. `filled` defaults to false. A negative radius draws nothing;\na float radius is floored, so a sin()-driven pulse is safe.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "r",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "filled",
+          "index": 5,
+          "optional": true,
+          "default": "false"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 150
+    },
+    {
+      "name": "gfx.clear",
+      "namespace": "gfx",
+      "short": "clear",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.clear(color)"
+        }
+      ],
+      "prose": "Fill the whole canvas with one palette index, and mark\nthe shared depth buffer for reset. Nearly every draw starts here; without\nit the previous frame shows through wherever this one draws nothing.\nIndex 0 is the one to choose deliberately: it is the sky, the water, the\nroom the game happens in.",
+      "params": [
+        {
+          "name": "color",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 122
+    },
+    {
+      "name": "gfx.floor",
+      "namespace": "gfx",
+      "short": "floor",
+      "group": "Heightfield terrain",
+      "signatures": [
+        {
+          "text": "gfx.floor(cfg)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Mode-7 textured ground plane (engine v6): sweeps\nthe loaded terrain colormap per scanline. cfg: x, y, z, yaw, horizon, vy,\nvh, focal, dist, fog1, fog2, tscale, sky, far. Fills the same depth\nbuffer gfx.ssprite z-tests against. false = nothing loaded.",
+      "params": [
+        {
+          "name": "cfg",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [
+        {
+          "name": "x",
+          "default": "0.0"
+        },
+        {
+          "name": "y",
+          "default": "0.0"
+        },
+        {
+          "name": "z",
+          "default": "12.0"
+        },
+        {
+          "name": "yaw",
+          "default": "0.0"
+        },
+        {
+          "name": "horizon",
+          "default": "46.0"
+        },
+        {
+          "name": "vy",
+          "default": "0.0"
+        },
+        {
+          "name": "vh",
+          "default": "200.0"
+        },
+        {
+          "name": "focal",
+          "default": "110.0"
+        },
+        {
+          "name": "dist",
+          "default": "90.0"
+        },
+        {
+          "name": "fog1",
+          "default": "35.0"
+        },
+        {
+          "name": "fog2",
+          "default": "60.0"
+        },
+        {
+          "name": "tscale",
+          "default": "2.0"
+        },
+        {
+          "name": "sky",
+          "default": "12.0"
+        },
+        {
+          "name": "far",
+          "default": "12.0"
+        },
+        {
+          "name": "depth",
+          "default": "true"
+        }
+      ],
+      "since": 6,
+      "needsAssets": false,
+      "stub": false,
+      "line": 301
+    },
+    {
+      "name": "gfx.image",
+      "namespace": "gfx",
+      "short": "image",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.image(name [, x, y [, scale]])",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Draw assets/images/{name}.vsp\n(a scene or background; engine v2). false when the image is missing.\nInteger scale (engine v14, 1..4) draws it nearest-neighbour scaled, the\nnative-canvas path for backgrounds authored against the classic canvas.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false,
+          "constraint": "image name only (no path, no extension)"
+        },
+        {
+          "name": "x",
+          "index": 2,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "y",
+          "index": 3,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "scale",
+          "index": 4,
+          "optional": true,
+          "default": "1"
+        }
+      ],
+      "fields": [],
+      "since": 2,
+      "needsAssets": true,
+      "stub": false,
+      "line": 204
+    },
+    {
+      "name": "gfx.line",
+      "namespace": "gfx",
+      "short": "line",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.line(x1, y1, x2, y2, color)"
+        }
+      ],
+      "prose": "Bresenham, inclusive endpoints, clipped\nper pixel, so coordinates off the canvas are safe rather than fatal.",
+      "params": [
+        {
+          "name": "x1",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y1",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "x2",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "y2",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 5,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 140
+    },
+    {
+      "name": "gfx.map",
+      "namespace": "gfx",
+      "short": "map",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.map(cel_x, cel_y, ...)"
+        }
+      ],
+      "prose": "NOT IMPLEMENTED. A no-op that logs once per\napp run. Tilemaps were deferred because sprite loops cover what v1 apps\nneed; the entry stays registered so an app that reaches for it gets nothing\ndrawn rather than a nil-index crash.",
+      "params": [],
+      "fields": [],
+      "needsAssets": false,
+      "stub": true,
+      "line": 257
+    },
+    {
+      "name": "gfx.mcam",
+      "namespace": "gfx",
+      "short": "mcam",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.mcam(cfg)"
+        }
+      ],
+      "prose": "Camera for every gfx.mesh (and gfx.vdraw) until the next\ncall. cfg:\n  x, y, z, yaw, pitch  = where the camera is and where it looks\n  focal                = pixels per world unit at distance 1\n  cx, cy               = projection centre, usually the canvas centre\n  tier                 = palette step C adds per lighting tier\n                         (stomp's +32/+64 convention, so 32)\n  lx, ly, lz           = light direction, normalised\n  fog1, fog2           = distance fog (engine v12): a face past fog1 drops\n                         one lighting tier, past fog2 two. The SAME two\n                         bands gfx.terrain and gfx.floor fade the ground\n                         through, so a model recedes into the haze with the\n                         world behind it instead of reading as a sticker.\n                         0 = off.\n  depth                = false skips the per-pixel depth test and fills\n                         spans with memset. The test costs 2 PSRAM reads +\n                         2 writes per pixel and buys nothing over a FLAT\n                         ground, so an app that sorts its models far-to-near\n                         should turn it off (~4 ms/frame in Pet Parade).\n  ztest                = false (engine v16) still WRITES depth but skips the\n                         compare: half the PSRAM traffic, for ground layers\n                         the app painter-orders itself. Things that\n                         interpenetrate, such as props and the player, keep it.",
+      "params": [
+        {
+          "name": "cfg",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [
+        {
+          "name": "x",
+          "default": "0.0"
+        },
+        {
+          "name": "y",
+          "default": "0.0"
+        },
+        {
+          "name": "z",
+          "default": "3.0"
+        },
+        {
+          "name": "yaw",
+          "default": "0.0"
+        },
+        {
+          "name": "pitch",
+          "default": "0.0"
+        },
+        {
+          "name": "focal",
+          "default": "110.0"
+        },
+        {
+          "name": "cx",
+          "default": "120.0"
+        },
+        {
+          "name": "cy",
+          "default": "80.0"
+        },
+        {
+          "name": "tier",
+          "default": "32.0"
+        },
+        {
+          "name": "lx",
+          "default": "-0.32"
+        },
+        {
+          "name": "ly",
+          "default": "-0.24"
+        },
+        {
+          "name": "lz",
+          "default": "0.92"
+        },
+        {
+          "name": "fog1",
+          "default": "0.0"
+        },
+        {
+          "name": "fog2",
+          "default": "0.0"
+        },
+        {
+          "name": "depth",
+          "default": "true"
+        },
+        {
+          "name": "ztest",
+          "default": "true"
+        }
+      ],
+      "since": 12,
+      "needsAssets": false,
+      "stub": false,
+      "line": 616
+    },
+    {
+      "name": "gfx.mesh",
+      "namespace": "gfx",
+      "short": "mesh",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.mesh(slot, x, y, z [, yaw [, scale [, pitch [, roll [, tier [, col [, smap [, zbias]]]]]]]])",
+          "returns": "faces drawn"
+        }
+      ],
+      "prose": "One call draws the whole model: transform, near-clip,\nbackface cull, directional lighting and a z-buffered span fill against the\nsame depth buffer gfx.terrain / gfx.floor write, so meshes occlude the\nground and each other with no sorting and no popping.\n\nroll spins the model about its own forward axis, because yaw and pitch\ntogether cannot express a barrel roll. tier defaults to -1 = light it; tier >= 0\nforces one lighting tier (flat/emissive). col >= 0 overrides every face\ncolour.\n\nsmap (engine v16) > 0 draws the mesh THROUGH that gfx.shademap level,\nremapping the framebuffer pixels it covers rather than replacing them,\nwhich is how real translucent shadows and tints are drawn. zbias (engine v16, world units) is a\ndepth priority: the mesh wins the z-fight against coplanar-ish layers below\nit, which is what water over terrain and decals on ground need. Affine\ndepth interpolation makes big flat layers fight, and tessellating them\nalone does not fully fix it.",
+      "params": [
+        {
+          "name": "slot",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "x",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "z",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "yaw",
+          "index": 5,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "scale",
+          "index": 6,
+          "optional": true,
+          "default": "1"
+        },
+        {
+          "name": "pitch",
+          "index": 7,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "roll",
+          "index": 8,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "tier",
+          "index": 9,
+          "optional": true,
+          "default": "-1"
+        },
+        {
+          "name": "col",
+          "index": 10,
+          "optional": true,
+          "default": "-1"
+        },
+        {
+          "name": "smap",
+          "index": 11,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "zbias",
+          "index": 12,
+          "optional": true,
+          "default": "0"
+        }
+      ],
+      "fields": [],
+      "since": 16,
+      "needsAssets": false,
+      "stub": false,
+      "line": 674
+    },
+    {
+      "name": "gfx.mload",
+      "namespace": "gfx",
+      "short": "mload",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.mload(model)",
+          "returns": "slot | nil"
+        },
+        {
+          "text": "gfx.mload(\"name\")",
+          "returns": "slot | nil"
+        }
+      ],
+      "prose": "Upload a model table (the shape each\ntools/assets gen.py emits, and stomp's lib/models.lua hand-builds):\n  verts = {{x,y,z}, ...}\n  faces = {{a,b,c[,d], col=, nx=, ny=, nz=}, ...}   -- 1-based, d = quad\n  parts = { name = {first_face, last_face, px,py,pz}, ... }  -- optional\nGeometry is copied into native arrays, so the Lua tables can be dropped\nafterwards. Call in vupp.init: it allocates, and the frame budget is real.\n\nEngine v16: load assets/models/\n{name}.vmesh straight into the mesh slot, touching zero Lua heap. Model\ntables of this size are ~15x their binary weight as Lua objects AND\nvupp.import pins whatever it returns for the life of the app, so a\ntwo-thousand-face model as a lib table is a memory bug, not a style\nchoice. Format (little-endian, the tools/assets gen scripts emit it):\n  \"VMSH\" u8 ver=1, u8 pad, u16 nv, u16 nf,\n  nv * 3*f32 xyz,\n  nf * { u16 a,b,c,d (0-based, d=0xFFFF triangle); u8 col; i8 nx,ny,nz }\nNo parts (rigid models); use the table form when a model needs mpose.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false,
+          "constraint": "model.faces: 1..8192 faces"
+        }
+      ],
+      "fields": [],
+      "since": 16,
+      "needsAssets": true,
+      "stub": false,
+      "line": 510
+    },
+    {
+      "name": "gfx.mpose",
+      "namespace": "gfx",
+      "short": "mpose",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.mpose(slot, part, yaw [, pitch [, dx, dy, dz]])"
+        }
+      ],
+      "prose": "Pose one part about\nits own pivot, sticky until changed. Parts are 1-based in the order\nmodel.parts iterated at load. This is how a character walks without a\nskeleton: swing the leg parts, bob the body.",
+      "params": [
+        {
+          "name": "slot",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "part",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "yaw",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "pitch",
+          "index": 4,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "dx",
+          "index": 5,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "dy",
+          "index": 6,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "dz",
+          "index": 7,
+          "optional": true,
+          "default": "0"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 644
+    },
+    {
+      "name": "gfx.munload",
+      "namespace": "gfx",
+      "short": "munload",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.munload(slot)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Free one mesh slot (engine v15). Lets a\nscreen-based app swap model sets inside the 16-slot budget; unloading a\nslot mid-frame that a queued gfx.mesh still references is the app's bug.",
+      "params": [
+        {
+          "name": "slot",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "since": 15,
+      "needsAssets": false,
+      "stub": false,
+      "line": 424
+    },
+    {
+      "name": "gfx.rect",
+      "namespace": "gfx",
+      "short": "rect",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.rect(x, y, w, h, color [, filled])"
+        }
+      ],
+      "prose": "(x,y) is the top-left corner.\n`filled` defaults to FALSE, so the plain five-argument call draws an\noutline; this is the most common surprise in a first app.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "w",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "h",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "filled",
+          "index": 6,
+          "optional": true,
+          "default": "false"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 131
+    },
+    {
+      "name": "gfx.shademap",
+      "namespace": "gfx",
+      "short": "shademap",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.shademap(level, t)"
+        }
+      ],
+      "prose": "Register the palette remap texcol applies at\n`shade` level 1..7 (0 = no shade): t[i+1] is the index drawn for source\nindex i. Missing entries keep the identity mapping. Don't map to 255,\ntransparency is decided before the remap.",
+      "params": [
+        {
+          "name": "level",
+          "index": 1,
+          "optional": false,
+          "constraint": "shade level 1..7"
+        },
+        {
+          "name": "t",
+          "index": 2,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 237
+    },
+    {
+      "name": "gfx.sprite",
+      "namespace": "gfx",
+      "short": "sprite",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.sprite(id, x, y [, flip \"x\"|\"y\"|\"xy\" [, scale]])"
+        }
+      ],
+      "prose": "A cell of\nassets/sprites.vsp (engine v2, docs/07). No-op when the app ships no sheet.\nInteger scale (engine v14) draws the cell scale x bigger, the native-canvas\npath for classic-authored art; routed through the ssprite scaler.",
+      "params": [
+        {
+          "name": "id",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "x",
+          "index": 2,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "y",
+          "index": 3,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "flip",
+          "index": 4,
+          "optional": true,
+          "default": "\"\""
+        },
+        {
+          "name": "scale",
+          "index": 5,
+          "optional": true,
+          "default": "1"
+        }
+      ],
+      "fields": [],
+      "since": 2,
+      "needsAssets": true,
+      "stub": false,
+      "line": 183
+    },
+    {
+      "name": "gfx.ssprite",
+      "namespace": "gfx",
+      "short": "ssprite",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.ssprite(cell, x, y, w, h [, flip [, shade [, depth]]])"
+        }
+      ],
+      "prose": "Sheet cell\nscaled to w x h. depth (world units) z-tests per pixel against the last\ngfx.terrain pass so billboards hide behind hills; omit for HUD and the\nplayer character. flip like gfx.sprite (\"x\"|\"y\"|\"xy\").",
+      "params": [
+        {
+          "name": "cell",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "x",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "w",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "h",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "flip",
+          "index": 6,
+          "optional": true,
+          "default": "\"\""
+        },
+        {
+          "name": "shade",
+          "index": 7,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "depth",
+          "index": 8,
+          "optional": true
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 383
+    },
+    {
+      "name": "gfx.terrain",
+      "namespace": "gfx",
+      "short": "terrain",
+      "group": "Heightfield terrain",
+      "signatures": [
+        {
+          "text": "gfx.terrain(cfg)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Render the loaded heightfield (engine v4). cfg:\nx, y, z, yaw (required-ish; default 0), horizon, vy, vh, focal, dist,\nfog1, fog2 (shademap levels 2/3 distance bands), water, wcolor, sky, colw.\nFills the per-pixel depth buffer ssprite z-tests against. false = no\nterrain loaded (parallels gfx.image).",
+      "params": [
+        {
+          "name": "cfg",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [
+        {
+          "name": "x",
+          "default": "0.0"
+        },
+        {
+          "name": "y",
+          "default": "0.0"
+        },
+        {
+          "name": "z",
+          "default": "10.0"
+        },
+        {
+          "name": "yaw",
+          "default": "0.0"
+        },
+        {
+          "name": "horizon",
+          "default": "64.0"
+        },
+        {
+          "name": "vy",
+          "default": "0.0"
+        },
+        {
+          "name": "vh",
+          "default": "168.0"
+        },
+        {
+          "name": "focal",
+          "default": "92.0"
+        },
+        {
+          "name": "dist",
+          "default": "64.0"
+        },
+        {
+          "name": "fog1",
+          "default": "22.0"
+        },
+        {
+          "name": "fog2",
+          "default": "44.0"
+        },
+        {
+          "name": "water",
+          "default": "-1.0"
+        },
+        {
+          "name": "sky",
+          "default": "12.0"
+        },
+        {
+          "name": "wcolor",
+          "default": "12.0"
+        },
+        {
+          "name": "colw",
+          "default": "1.0"
+        },
+        {
+          "name": "depth",
+          "default": "true"
+        }
+      ],
+      "since": 4,
+      "needsAssets": false,
+      "stub": false,
+      "line": 344
+    },
+    {
+      "name": "gfx.texcol",
+      "namespace": "gfx",
+      "short": "texcol",
+      "group": "Sprites and images",
+      "signatures": [
+        {
+          "text": "gfx.texcol(x, yTop, h, cell, tx [, shade [, w]])"
+        }
+      ],
+      "prose": "One textured vertical\ncolumn: texel column tx of sheet cell `cell`, scaled to h on-screen pixels\nstarting at yTop (engine v3). Transparent texels skip, so billboards draw\ncolumn-by-column. No-op when the app ships no sheet, like gfx.sprite.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "yTop",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "h",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "cell",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "tx",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "shade",
+          "index": 6,
+          "optional": true,
+          "default": "0"
+        },
+        {
+          "name": "w",
+          "index": 7,
+          "optional": true,
+          "default": "1"
+        }
+      ],
+      "fields": [],
+      "since": 3,
+      "needsAssets": false,
+      "stub": false,
+      "line": 219
+    },
+    {
+      "name": "gfx.text",
+      "namespace": "gfx",
+      "short": "text",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.text(str, x, y, color [, size])"
+        }
+      ],
+      "prose": "Size 1, 2 or 3 (default 1), and each\nsize is its OWN glyph set rather than a scale: 4x6, 8x12 and 12x18 cells,\nso big text is drawn at its own resolution instead of upscaled. Advance is\nalways 4*size px per character and line height 6*size px, so centre with\nx = (gfx.w - #str * 4 * size) / 2. Do the arithmetic, do not eyeball it.\n\"\\n\" starts a new line.\n\nASCII 32..127 ONLY. Every other byte draws a literal \"?\", which bites\nhardest exactly where it is most tempting: a star, an arrow, a heart or an\naccented name in a score badge. \"★ 70\" renders as \"?70?\" because the star\nis three bytes. Draw those with gfx.circle / gfx.tri / gfx.rect.\n\nAnything a CHILD reads wants size 3 (size 2 for secondary labels); size 1\nis a 4x6 glyph, genuinely unreadable to a five-year-old, and exists for\ndebug text. Size 3 needs engine v8 and clamps to 2 below that.",
+      "params": [
+        {
+          "name": "str",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "x",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "size",
+          "index": 5,
+          "optional": true,
+          "default": "1"
+        }
+      ],
+      "fields": [],
+      "since": 8,
+      "needsAssets": false,
+      "stub": false,
+      "line": 172
+    },
+    {
+      "name": "gfx.theight",
+      "namespace": "gfx",
+      "short": "theight",
+      "group": "Heightfield terrain",
+      "signatures": [
+        {
+          "text": "gfx.theight(x, y)",
+          "returns": "number"
+        }
+      ],
+      "prose": "Bilinear terrain height in world units\n(movement, camera, billboard feet). 0 when no terrain is loaded.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 372
+    },
+    {
+      "name": "gfx.tload",
+      "namespace": "gfx",
+      "short": "tload",
+      "group": "Heightfield terrain",
+      "signatures": [
+        {
+          "text": "gfx.tload(name [, hscale])",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Load assets/terrain/{name}_h.vsp +\n{name}_c.vsp (square power-of-two planes) into the terrain slot. hscale\nconverts height bytes to world units (default 0.1). One slot per app run.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false,
+          "constraint": "terrain name only (no path, no extension)"
+        },
+        {
+          "name": "hscale",
+          "index": 2,
+          "optional": true
+        }
+      ],
+      "fields": [],
+      "needsAssets": true,
+      "stub": false,
+      "line": 329
+    },
+    {
+      "name": "gfx.tri",
+      "namespace": "gfx",
+      "short": "tri",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.tri(x0,y0,x1,y1,x2,y2,color)"
+        }
+      ],
+      "prose": "flat-shaded triangle (engine v5), any\nwinding, clipped. Lighting = the app picking a darker palette tier.",
+      "params": [
+        {
+          "name": "x0",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y0",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "x1",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "y1",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "x2",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "y2",
+          "index": 6,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 7,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "since": 5,
+      "needsAssets": false,
+      "stub": false,
+      "line": 290
+    },
+    {
+      "name": "gfx.vblock",
+      "namespace": "gfx",
+      "short": "vblock",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vblock(id, top, side, bottom)"
+        }
+      ],
+      "prose": "Palette indices per face. The renderer\nadds the lighting tier (gfx.mcam{tier=}) per face direction, so give it the\nBASE colour and let the tiers live at +tier / +2*tier as everywhere else.",
+      "params": [
+        {
+          "name": "id",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "top",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "side",
+          "index": 3,
+          "optional": true,
+          "default": "same as top"
+        },
+        {
+          "name": "bottom",
+          "index": 4,
+          "optional": true,
+          "default": "same as side"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 750
+    },
+    {
+      "name": "gfx.vbox",
+      "namespace": "gfx",
+      "short": "vbox",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vbox(x, y, z, sx, sy, sz, block)"
+        }
+      ],
+      "prose": "Draw one axis-aligned box this frame,\nordered against the world. This is how a third-person character (or, later,\na mob) exists: it cannot be a grid cell because it moves, and it cannot be a\ngfx.mesh because the voxel pass owns the span buffer and keeps no depth\nbuffer for a later pass to test against. (x,y) is the centre, z the base.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "z",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "sx",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "sy",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "sz",
+          "index": 6,
+          "optional": false
+        },
+        {
+          "name": "block",
+          "index": 7,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 773
+    },
+    {
+      "name": "gfx.vdraw",
+      "namespace": "gfx",
+      "short": "vdraw",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vdraw()",
+          "returns": "quads drawn"
+        }
+      ],
+      "prose": "Remeshes dirty chunks, then rasterises the whole\nworld in ONE call through the span buffer: near-to-far, memset only what is\nstill uncovered. Uses the gfx.mcam camera. No depth buffer is touched, so\nanything drawn after this must painter-order itself.",
+      "params": [],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 850
+    },
+    {
+      "name": "gfx.vfill",
+      "namespace": "gfx",
+      "short": "vfill",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vfill(x0,y0,z0, x1,y1,z1, block)"
+        }
+      ],
+      "prose": "Inclusive box. Worldgen goes through\nhere: a Lua triple loop over even a small world blows the per-callback\ninstruction budget long before it finishes.",
+      "params": [
+        {
+          "name": "x0",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y0",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "z0",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "x1",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "y1",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "z1",
+          "index": 6,
+          "optional": false
+        },
+        {
+          "name": "block",
+          "index": 7,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 728
+    },
+    {
+      "name": "gfx.vget",
+      "namespace": "gfx",
+      "short": "vget",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vget(x,y,z)",
+          "returns": "block"
+        }
+      ],
+      "prose": "The block id at one cell, 0 for air. Reading\noutside the world is 0 too rather than an error, so collision code can\nprobe freely at the edges without bounds-checking first.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "z",
+          "index": 3,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 719
+    },
+    {
+      "name": "gfx.vline",
+      "namespace": "gfx",
+      "short": "vline",
+      "group": "Shapes and text",
+      "signatures": [
+        {
+          "text": "gfx.vline(x, y0, y1, color)"
+        }
+      ],
+      "prose": "Flat vertical line, inclusive endpoints.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y0",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "y1",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "color",
+          "index": 4,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 227
+    },
+    {
+      "name": "gfx.vload",
+      "namespace": "gfx",
+      "short": "vload",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vload(name)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Persist the whole block world\n(engine v17). Names are [a-z0-9_].\nIt goes beside the app's documents (not in the app directory, which an\nupdate replaces), so a child's world survives a reinstall. The grid\nrun-length-encodes itself in C: 368,640 cells is three orders of magnitude\npast the 4KB document cap and far past what Lua could walk on device.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "since": 17,
+      "needsAssets": false,
+      "stub": false,
+      "line": 810
+    },
+    {
+      "name": "gfx.vlod",
+      "namespace": "gfx",
+      "short": "vlod",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vlod(dist)"
+        }
+      ],
+      "prose": "How far out gfx.vpattern textures still draw (default 40\nblocks). A textured span runs a per-pixel loop where a flat one is a\nmemset, so this is the app's dial between how far the texture reads and\nhow much of the frame the far field costs. 0 = texture everything.",
+      "params": [
+        {
+          "name": "dist",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 822
+    },
+    {
+      "name": "gfx.vpattern",
+      "namespace": "gfx",
+      "short": "vpattern",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vpattern(id, accent, mask)"
+        }
+      ],
+      "prose": "A 4x4 texture for one block type, the SAME\non all six faces so a block is recognisable from any angle. mask is 16 bits\nread row-major (bit 0 = top-left); a set bit draws `accent` instead of the\nface colour. Both take the lighting tier, so a patterned block shades like a\nflat one. Omit it (or pass mask 0) and the block fills at memset speed.",
+      "params": [
+        {
+          "name": "id",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "accent",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "mask",
+          "index": 3,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 762
+    },
+    {
+      "name": "gfx.vray",
+      "namespace": "gfx",
+      "short": "vray",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vray(x,y,z, dx,dy,dz [, maxd])",
+          "returns": "hx,hy,hz, px,py,pz | nil"
+        }
+      ],
+      "prose": "The first\nsolid cell along the ray and the empty cell just before it (break here,\nplace there). This is the crosshair.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "z",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "dx",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "dy",
+          "index": 5,
+          "optional": false
+        },
+        {
+          "name": "dz",
+          "index": 6,
+          "optional": false
+        },
+        {
+          "name": "maxd",
+          "index": 7,
+          "optional": true,
+          "default": "8"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 831
+    },
+    {
+      "name": "gfx.vsave",
+      "namespace": "gfx",
+      "short": "vsave",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vsave(name)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Persist the whole block world\n(engine v17). Names are [a-z0-9_].\nIt goes beside the app's documents (not in the app directory, which an\nupdate replaces), so a child's world survives a reinstall. The grid\nrun-length-encodes itself in C: 368,640 cells is three orders of magnitude\npast the 4KB document cap and far past what Lua could walk on device.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "since": 17,
+      "needsAssets": false,
+      "stub": false,
+      "line": 802
+    },
+    {
+      "name": "gfx.vset",
+      "namespace": "gfx",
+      "short": "vset",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vset(x,y,z,block)"
+        }
+      ],
+      "prose": "0 = air. Marks the chunk (and any neighbour whose\nboundary faces change) for remesh; the next gfx.vdraw does the work.",
+      "params": [
+        {
+          "name": "x",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "y",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "z",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "block",
+          "index": 4,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 710
+    },
+    {
+      "name": "gfx.vterrain",
+      "namespace": "gfx",
+      "short": "vterrain",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vterrain(heights, top, sub, deep [, subdepth])"
+        }
+      ],
+      "prose": "Extrude a w*d byte\nstring of column heights (row-major) in ONE call. This is how a world gets\nbuilt: Lua does the noise, C does the filling.",
+      "params": [
+        {
+          "name": "heights",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "top",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "sub",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "deep",
+          "index": 4,
+          "optional": false
+        },
+        {
+          "name": "subdepth",
+          "index": 5,
+          "optional": true,
+          "default": "3"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 738
+    },
+    {
+      "name": "gfx.vworld",
+      "namespace": "gfx",
+      "short": "vworld",
+      "group": "Block worlds",
+      "signatures": [
+        {
+          "text": "gfx.vworld{w=,d=,h=,chunk=}",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Allocate the block grid. One per app\nrun; the world dies with the app. Cells are 1 byte, 0 = air, so 128x128x48\nis 786KB of PSRAM where the same grid as a Lua table would blow the 2MB\nheap. w and d must be multiples of chunk.",
+      "params": [
+        {
+          "name": "cfg",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [
+        {
+          "name": "w",
+          "default": "64.0"
+        },
+        {
+          "name": "d",
+          "default": "64.0"
+        },
+        {
+          "name": "h",
+          "default": "32.0"
+        },
+        {
+          "name": "chunk",
+          "default": "16.0"
+        }
+      ],
+      "since": 17,
+      "needsAssets": false,
+      "stub": false,
+      "line": 697
+    },
+    {
+      "name": "gfx.zclear",
+      "namespace": "gfx",
+      "short": "zclear",
+      "group": "Meshes",
+      "signatures": [
+        {
+          "text": "gfx.zclear()"
+        }
+      ],
+      "prose": "Reset the depth buffer to far (engine v16). For mesh scenes\nwith no ground pass (cards, mirrors) that still want z-tested models.",
+      "params": [],
+      "fields": [],
+      "since": 16,
+      "needsAssets": false,
+      "stub": false,
+      "line": 414
+    },
+    {
+      "name": "vupp.ambience",
+      "namespace": "vupp",
+      "short": "ambience",
+      "group": "Sound",
+      "signatures": [
+        {
+          "text": "vupp.ambience(name [, vol 0..0.5])"
+        }
+      ],
+      "prose": "Loop assets/sfx/{name}.wav as a soft\nbackground bed; vupp.ambience() (or nil) stops it. Engine v15. Idempotent:\ncalling every frame with the same bed is free, so apps can just assert the\nambience for their current scene in update(). Exempt from the politeness\nlimiter, the engine governs it instead: ONE bed at a time, volume hard-\ncapped soft (0.5), stopped by pause/suspend like every app voice (the\nper-frame re-assert restarts it after resume).",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": true,
+          "constraint": "sfx name only (no path, no extension)"
+        },
+        {
+          "name": "vol",
+          "index": 2,
+          "optional": true,
+          "default": "0.35"
+        }
+      ],
+      "fields": [],
+      "since": 15,
+      "needsAssets": true,
+      "stub": false,
+      "line": 1032
+    },
+    {
+      "name": "vupp.btn",
+      "namespace": "vupp",
+      "short": "btn",
+      "group": "Input",
+      "signatures": [
+        {
+          "text": "vupp.btn(b)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Is button `b` held right now? One of \"up\", \"down\",\n\"left\", \"right\", \"a\", \"b\", \"select\"; an unknown name raises. \"start\" never\nreaches an app, because the engine owns it for the pause menu (engine v7).\nThere\nis no event queue: read the pad every frame.",
+      "params": [],
+      "fields": [],
+      "since": 7,
+      "needsAssets": false,
+      "stub": false,
+      "line": 74
+    },
+    {
+      "name": "vupp.btnp",
+      "namespace": "vupp",
+      "short": "btnp",
+      "group": "Input",
+      "signatures": [
+        {
+          "text": "vupp.btnp(b)",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Was `b` pressed on THIS frame? The edge, not the\nlevel. Jumping, firing and moving a menu cursor want this one; walking\nwants vupp.btn, and using btn where btnp belongs is why a menu selection\nflies past six entries on one press.",
+      "params": [],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 84
+    },
+    {
+      "name": "vupp.canvas.save",
+      "namespace": "vupp.canvas",
+      "short": "save",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.canvas.save(doc_key, payload [, rect{x,y,w,h}])",
+          "returns": "bool"
+        }
+      ],
+      "prose": "Captures the CURRENT app canvas (or the `rect` region, canvas coords) ->\npalette RGB565 -> 2x nearest-neighbor upscale (nicer viewing on phones) ->\nJPEG beside the document as {doc_key}.jpg -> docstore document\n{doc_type \"drawing\", payload, assets {\"image\":\"{doc_key}.jpg\"}, status\n\"queued\", origin \"device\"} -> doc.put sync job (uploads the JPEG, upserts\nthe row). Re-saving the same key overwrites: the row id stays stable (like\nthe store doc), so newest wins locally and in the cloud (409->PATCH path).\nBad usage (oversized payload, bad key/rect) raises; I/O trouble returns\nfalse (logged) so a full SD can't crash the app mid-masterpiece.",
+      "params": [
+        {
+          "name": "doc_key",
+          "index": 1,
+          "optional": false,
+          "constraint": "key may not contain '/'"
+        },
+        {
+          "name": "payload",
+          "index": 2,
+          "optional": false
+        },
+        {
+          "name": "rect",
+          "index": 3,
+          "optional": true,
+          "constraint": "rect outside the canvas"
+        }
+      ],
+      "fields": [
+        {
+          "name": "x",
+          "default": "required"
+        },
+        {
+          "name": "y",
+          "default": "required"
+        },
+        {
+          "name": "w",
+          "default": "required"
+        },
+        {
+          "name": "h",
+          "default": "required"
+        }
+      ],
+      "capability": "canvas",
+      "needsAssets": false,
+      "stub": false,
+      "line": 1283
+    },
+    {
+      "name": "vupp.date",
+      "namespace": "vupp",
+      "short": "date",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.date()"
+        }
+      ],
+      "prose": "The real-world clock (engine v15): local date/time off the\nbattery-backed RTC through the policy tz table. Returns nil until the clock\nhas plausibly been set (epoch >= 2020), apps MUST handle nil (grow-style\nper-visit fallbacks) since a fresh device may never have synced.",
+      "params": [],
+      "fields": [],
+      "since": 15,
+      "needsAssets": false,
+      "stub": false,
+      "line": 1066
+    },
+    {
+      "name": "vupp.docs.get",
+      "namespace": "vupp.docs",
+      "short": "get",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.docs.get(doc_type, key)",
+          "returns": "payload table | nil"
+        }
+      ],
+      "prose": "One document from the\napp's own namespace. nil when there is no such key, and also when the key\nexists but holds a different doc_type.",
+      "params": [
+        {
+          "name": "doc_type",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "key",
+          "index": 2,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1193
+    },
+    {
+      "name": "vupp.docs.list",
+      "namespace": "vupp.docs",
+      "short": "list",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.docs.list(doc_type)",
+          "returns": "array of documents"
+        }
+      ],
+      "prose": "Every document of that\ntype in the app's own namespace, including the ones a parent pushed\n(origin tells them apart). Each entry is {key, doc_type, status, origin,\npayload}. Bounded to the newest 32, like the Messages screen.",
+      "params": [
+        {
+          "name": "doc_type",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1213
+    },
+    {
+      "name": "vupp.docs.of",
+      "namespace": "vupp.docs",
+      "short": "of",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.docs.of(app_ref)"
+        }
+      ],
+      "prose": "READ another app's documents (no isolation between\napps by design, docs/11; writes stay in the own namespace).",
+      "params": [
+        {
+          "name": "app_ref",
+          "index": 1,
+          "optional": false,
+          "constraint": "app_ref must be 'system:{name}' or 'lib:{slug}'"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1220
+    },
+    {
+      "name": "vupp.docs.put",
+      "namespace": "vupp.docs",
+      "short": "put",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.docs.put(doc_type, key, payload [, asset_path])"
+        }
+      ],
+      "prose": "Upsert into the\napp's own namespace + queue the doc.put sync job.",
+      "params": [
+        {
+          "name": "doc_type",
+          "index": 1,
+          "optional": false,
+          "constraint": "doc_type too long"
+        },
+        {
+          "name": "key",
+          "index": 2,
+          "optional": false,
+          "constraint": "key may not contain '/'"
+        },
+        {
+          "name": "payload",
+          "index": 3,
+          "optional": false
+        },
+        {
+          "name": "asset_path",
+          "index": 4,
+          "optional": true
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1140
+    },
+    {
+      "name": "vupp.emit",
+      "namespace": "vupp",
+      "short": "emit",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.emit(name, payload)"
+        }
+      ],
+      "prose": "A note for the parent's activity feed, the thing\na parent actually opens the phone app to see. Emit at genuine milestones\nsuch as \"finished_level\", \"spelled_word\" or \"drawing.saved\", never per frame.\npayload is an optional small table; more than 512 bytes of JSON raises.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "payload",
+          "index": 2,
+          "optional": true
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1384
+    },
+    {
+      "name": "vupp.import",
+      "namespace": "vupp",
+      "short": "import",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.import(name)",
+          "returns": "whatever lib/{name}.lua returns"
+        }
+      ],
+      "prose": "The only module\nloader there is, since require/dofile/loadfile/load are removed from the\nsandbox. Names are [a-z0-9_] with no path and no extension.\n\nResults are cached for the life of the app, which is the point and also the\ntrap: whatever a module returns is pinned in the 2 MB Lua heap until the app\nexits, so a lib file holding a big generated table costs that memory for the\nwhole run (see gfx.mload's .vmesh form for the way out). A module that\nreturns nothing caches as true, so it still only runs once.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1510
+    },
+    {
+      "name": "vupp.on_command",
+      "namespace": "vupp",
+      "short": "on_command",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.on_command(fn)"
+        }
+      ],
+      "prose": "Register fn(name, args) -> result table for the\ncommands the manifest declares (docs/11-app-contract.md). The runtime\nhandles acknowledgement and expiry; the app just answers.",
+      "params": [
+        {
+          "name": "fn",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1244
+    },
+    {
+      "name": "vupp.on_document",
+      "namespace": "vupp",
+      "short": "on_document",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.on_document(fn)"
+        }
+      ],
+      "prose": "Register fn(doc) for documents the PARENT pushes\nwhile the app is running: a new colouring page, a word list, a photo. The\nruntime calls it; the app never does. doc has the same shape vupp.docs.list\nreturns.",
+      "params": [
+        {
+          "name": "fn",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1233
+    },
+    {
+      "name": "vupp.quit",
+      "namespace": "vupp",
+      "short": "quit",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.quit()"
+        }
+      ],
+      "prose": "Return to the launcher. Rarely the right call: since engine\nv7 the START pause menu is how a child leaves an app, and an app that quits\nitself takes that choice away mid-play.",
+      "params": [],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1492
+    },
+    {
+      "name": "vupp.rand",
+      "namespace": "vupp",
+      "short": "rand",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.rand()",
+          "returns": "float in [0,1)"
+        },
+        {
+          "text": "vupp.rand(n)",
+          "returns": "integer in 1..n"
+        }
+      ],
+      "prose": "xorshift64* seeded once per run, which is the reason to prefer it over\nmath.random: a bug you hit reproduces on the next launch instead of\nevaporating. math.random works and is not removed, but it does not have\nthat property.",
+      "params": [
+        {
+          "name": "n",
+          "index": 1,
+          "optional": true,
+          "constraint": "n must be >= 1"
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1470
+    },
+    {
+      "name": "vupp.sfx",
+      "namespace": "vupp",
+      "short": "sfx",
+      "group": "Sound",
+      "signatures": [
+        {
+          "text": "vupp.sfx(name [, vol 0..1])"
+        }
+      ],
+      "prose": "Play assets/sfx/{name}.wav (16 kHz mono s16,\nloudness-normalized at publish). Cached per app run.",
+      "params": [
+        {
+          "name": "name",
+          "index": 1,
+          "optional": false,
+          "constraint": "sfx name only (no path, no extension)"
+        },
+        {
+          "name": "vol",
+          "index": 2,
+          "optional": true,
+          "default": "0.8"
+        }
+      ],
+      "fields": [],
+      "needsAssets": true,
+      "stub": false,
+      "line": 997
+    },
+    {
+      "name": "vupp.store.get",
+      "namespace": "vupp.store",
+      "short": "get",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.store.get(key [, default])",
+          "returns": "the stored value, or `default` when the"
+        }
+      ],
+      "prose": "Key was never written.",
+      "params": [
+        {
+          "name": "key",
+          "index": 1,
+          "optional": false
+        },
+        {
+          "name": "default",
+          "index": 2,
+          "optional": true
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1439
+    },
+    {
+      "name": "vupp.store.set",
+      "namespace": "vupp.store",
+      "short": "set",
+      "group": "Saving and data",
+      "signatures": [
+        {
+          "text": "vupp.store.set(key, value)"
+        }
+      ],
+      "prose": "Value is nil | bool | number | string | small\ntable. Sugar over a single 'store' document underneath, so a high score is\nparent-visible like everything else and survives both leaving the app and\nreinstalling it. It also survives an edit, which is worth remembering while\ntesting a \"best score\".\n\nThe WHOLE store has to serialize into one document payload, so the size\ncheck happens on the write rather than at flush time: an oversized value is\nrolled back and raises, instead of quietly losing the save later. \"store\"\nis a reserved document key. Keep it to a high score or the furthest level;\nthis is a save file, not a database.",
+      "params": [
+        {
+          "name": "key",
+          "index": 1,
+          "optional": false
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1411
+    },
+    {
+      "name": "vupp.time",
+      "namespace": "vupp",
+      "short": "time",
+      "group": "Everything else",
+      "signatures": [
+        {
+          "text": "vupp.time()",
+          "returns": "number"
+        }
+      ],
+      "prose": "Seconds of play since this app started, pauses\nexcluded. Not a wall clock and not comparable across runs: it is the clock\nto drive animation and timers off. vupp.date() is the real-world one.",
+      "params": [],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 1457
+    },
+    {
+      "name": "vupp.tone",
+      "namespace": "vupp",
+      "short": "tone",
+      "group": "Sound",
+      "signatures": [
+        {
+          "text": "vupp.tone(freq, ms [, vol 0..1 [, wave]])"
+        }
+      ],
+      "prose": "A voice on the mixer. Waves:\n\"tri\" (default, soft), \"sine\", \"square\" (chiptune), \"saw\", \"noise\".",
+      "params": [
+        {
+          "name": "freq",
+          "index": 1,
+          "optional": false,
+          "constraint": "freq 20..8000 Hz"
+        },
+        {
+          "name": "ms",
+          "index": 2,
+          "optional": false,
+          "constraint": "duration 1..5000 ms"
+        },
+        {
+          "name": "vol",
+          "index": 3,
+          "optional": true,
+          "default": "0.6"
+        },
+        {
+          "name": "wave",
+          "index": 4,
+          "optional": true,
+          "default": "\"tri\""
+        }
+      ],
+      "fields": [],
+      "needsAssets": false,
+      "stub": false,
+      "line": 934
+    },
+    {
+      "name": "vupp.touch",
+      "namespace": "vupp",
+      "short": "touch",
+      "group": "Input",
+      "signatures": [
+        {
+          "text": "vupp.touch()",
+          "returns": "nil | {x, y, held} in canvas coordinates"
+        }
+      ],
+      "prose": "Held is true the\nwhole time a finger is down (apps do their own press-edge detection).\nOnly injected when the manifest declares the \"touch\" capability.",
+      "params": [],
+      "fields": [],
+      "capability": "touch",
+      "needsAssets": false,
+      "stub": false,
+      "line": 93
+    }
+  ],
+  "values": [
+    {
+      "name": "gfx.w",
+      "prose": "Canvas width in pixels: 480 with \"hires\": true in app.json, 240 without. A plain number, not a call, so reading it is free.",
+      "since": 14
+    },
+    {
+      "name": "gfx.h",
+      "prose": "Canvas height in pixels: 320 hires, 160 legacy. A plain number, not a call.",
+      "since": 14
+    }
+  ],
+  "globals": [
+    {
+      "name": "print",
+      "prose": "Goes to the device log tagged with the app slug. A child never sees it; the bench devconsole does."
+    }
+  ],
+  "removed": [
+    "dofile",
+    "loadfile",
+    "load",
+    "collectgarbage"
+  ],
+  "stdlib": [
+    "base",
+    "math",
+    "string",
+    "table",
+    "utf8"
+  ]
+}

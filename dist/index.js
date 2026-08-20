@@ -35,7 +35,7 @@ var DEVICE_STATUSES = ["unclaimed", "active", "locked", "retired"];
 var PAIRING_CODE_LENGTH = 6;
 var DEVICE_JWT_TTL_S = 24 * 60 * 60;
 var DEVICE_JWT_REFRESH_WINDOW_S = 6 * 60 * 60;
-var APP_ENGINE_VERSION = 16;
+var APP_ENGINE_VERSION = 17;
 var APP_PALETTE_MAX = 255;
 var AUDIO_MUTE_MAX_S = 4 * 60 * 60;
 var OTA_CHECK_INTERVAL_S = 6 * 60 * 60;
@@ -61,7 +61,7 @@ var claimRequestSchema = z.object({
   code: pairingCodeSchema,
   kid_id: z.guid(),
   name: z.string().min(1).max(60),
-  // The claiming phone's IANA timezone — it seeds the kid's first policy so
+  // The claiming phone's IANA timezone, it seeds the kid's first policy so
   // quiet hours run on family time from day one. Optional for old app builds;
   // the server validates against its own IANA table and falls back if bogus.
   timezone: z.string().min(1).max(64).optional()
@@ -73,13 +73,13 @@ var tokenChallengeResponseSchema = z.object({
 var tokenRequestSchema = z.object({
   fingerprint: z.string().length(64),
   // Self-certifying: server checks sha256(pubkey) === fingerprint, then verifies
-  // the signature with this pubkey — no server-side pubkey storage needed.
+  // the signature with this pubkey, no server-side pubkey storage needed.
   pubkey: z.string(),
   nonce: z.string(),
   signature: z.string(),
   // base64 ECDSA P-256 signature over `${fingerprint}.${nonce}`
   // sha256 of a staged local-channel secret the device has stored. Its presence
-  // is what promotes that secret to active (docs/04 §1) — the device proving it
+  // is what promotes that secret to active (docs/04 §1), the device proving it
   // holds the new value is the only thing that makes the swap safe.
   lc_ack: z.string().length(64).optional()
 });
@@ -88,7 +88,7 @@ var tokenResponseSchema = z.object({
   expires_at: z.iso.datetime(),
   device_id: z.guid(),
   family_id: z.guid(),
-  // Local-channel secret (docs/04 §1) — omitted (never null) when the row
+  // Local-channel secret (docs/04 §1), omitted (never null) when the row
   // predates the column and the backfill hasn't run.
   local_channel_secret: z.string().optional(),
   // A rotation waiting to be taken up: the device stores this, then acks with
@@ -178,13 +178,13 @@ var kidPolicyLocationSchema = z.object({
   enabled: z.boolean().optional(),
   notify_arrive: z.boolean().optional(),
   notify_depart: z.boolean().optional(),
-  // LTE SKU only (docs/14-cellular.md): GNSS fixes off WiFi. Absent = false —
+  // LTE SKU only (docs/14-cellular.md): GNSS fixes off WiFi. Absent = false,
   // precise location is a separate, stricter consent than semantic places.
   precise: z.boolean().optional()
 });
 var quietHoursSchema = z.array(
   z.object({
-    // ISO weekday numbers, 1=Mon .. 7=Sun — what the mobile editor writes
+    // ISO weekday numbers, 1=Mon .. 7=Sun, what the mobile editor writes
     // and the firmware's quiet-hours scheduler parses.
     days: z.array(z.number().int().min(1).max(7)),
     start: z.string().regex(/^\d{2}:\d{2}$/),
@@ -284,7 +284,7 @@ var budgetUpsertOpSchema = z2.object({
   name: z2.string().min(1).max(40),
   seconds_per_day: z2.record(z2.string(), z2.number().int().min(0).max(86400)),
   system_apps: z2.array(z2.enum(SYSTEM_APP_NAMES)).default([]),
-  /** Catalog slugs — the app resolves slugs → library_app_ids at execute time. */
+  /** Catalog slugs, the app resolves slugs → library_app_ids at execute time. */
   library_app_slugs: z2.array(z2.string()).default([])
 });
 var budgetDeleteOpSchema = z2.object({
@@ -347,6 +347,200 @@ var aiProposalSchema = z2.discriminatedUnion("kind", [
   commandProposalSchema
 ]);
 
+// ../shared/src/engine-signatures.json
+var engine_signatures_default = {
+  engine: 17,
+  gfx: {
+    circle: {
+      min: 4,
+      max: 5,
+      form: "gfx.circle(x, y, r, color [, filled])",
+      color: 4
+    },
+    clear: {
+      min: 1,
+      max: 1,
+      form: "gfx.clear(color)",
+      color: 1
+    },
+    floor: {
+      min: 1,
+      max: 1,
+      form: "gfx.floor(cfg)"
+    },
+    image: {
+      min: 1,
+      max: 4,
+      form: "gfx.image(name [, x, y [, scale]])"
+    },
+    line: {
+      min: 5,
+      max: 5,
+      form: "gfx.line(x1, y1, x2, y2, color)",
+      color: 5
+    },
+    map: {
+      min: 0,
+      max: 0,
+      form: "gfx.map(cel_x, cel_y, ...)"
+    },
+    mcam: {
+      min: 1,
+      max: 1,
+      form: "gfx.mcam(cfg)"
+    },
+    mesh: {
+      min: 4,
+      max: 12,
+      form: "gfx.mesh(slot, x, y, z [, yaw [, scale [, pitch [, roll [, tier [, col [, smap [, zbias]]]]]]]])"
+    },
+    mload: {
+      min: 1,
+      max: 1,
+      form: 'gfx.mload("name")'
+    },
+    mpose: {
+      min: 3,
+      max: 7,
+      form: "gfx.mpose(slot, part, yaw [, pitch [, dx, dy, dz]])"
+    },
+    munload: {
+      min: 1,
+      max: 1,
+      form: "gfx.munload(slot)"
+    },
+    rect: {
+      min: 5,
+      max: 6,
+      form: "gfx.rect(x, y, w, h, color [, filled])",
+      color: 5
+    },
+    shademap: {
+      min: 2,
+      max: 2,
+      form: "gfx.shademap(level, t)"
+    },
+    sprite: {
+      min: 1,
+      max: 5,
+      form: 'gfx.sprite(id, x, y [, flip "x"|"y"|"xy" [, scale]])'
+    },
+    ssprite: {
+      min: 5,
+      max: 8,
+      form: "gfx.ssprite(cell, x, y, w, h [, flip [, shade [, depth]]])"
+    },
+    terrain: {
+      min: 1,
+      max: 1,
+      form: "gfx.terrain(cfg)"
+    },
+    texcol: {
+      min: 5,
+      max: 7,
+      form: "gfx.texcol(x, yTop, h, cell, tx [, shade [, w]])"
+    },
+    text: {
+      min: 4,
+      max: 5,
+      form: "gfx.text(str, x, y, color [, size])",
+      color: 4
+    },
+    theight: {
+      min: 2,
+      max: 2,
+      form: "gfx.theight(x, y)"
+    },
+    tload: {
+      min: 1,
+      max: 2,
+      form: "gfx.tload(name [, hscale])"
+    },
+    tri: {
+      min: 7,
+      max: 7,
+      form: "gfx.tri(x0,y0,x1,y1,x2,y2,color)",
+      color: 7
+    },
+    vblock: {
+      min: 2,
+      max: 4,
+      form: "gfx.vblock(id, top, side, bottom)"
+    },
+    vbox: {
+      min: 7,
+      max: 7,
+      form: "gfx.vbox(x, y, z, sx, sy, sz, block)"
+    },
+    vdraw: {
+      min: 0,
+      max: 0,
+      form: "gfx.vdraw()"
+    },
+    vfill: {
+      min: 7,
+      max: 7,
+      form: "gfx.vfill(x0,y0,z0, x1,y1,z1, block)"
+    },
+    vget: {
+      min: 3,
+      max: 3,
+      form: "gfx.vget(x,y,z)"
+    },
+    vline: {
+      min: 4,
+      max: 4,
+      form: "gfx.vline(x, y0, y1, color)",
+      color: 4
+    },
+    vload: {
+      min: 1,
+      max: 1,
+      form: "gfx.vload(name)"
+    },
+    vlod: {
+      min: 1,
+      max: 1,
+      form: "gfx.vlod(dist)"
+    },
+    vpattern: {
+      min: 3,
+      max: 3,
+      form: "gfx.vpattern(id, accent, mask)"
+    },
+    vray: {
+      min: 6,
+      max: 7,
+      form: "gfx.vray(x,y,z, dx,dy,dz [, maxd])"
+    },
+    vsave: {
+      min: 1,
+      max: 1,
+      form: "gfx.vsave(name)"
+    },
+    vset: {
+      min: 4,
+      max: 4,
+      form: "gfx.vset(x,y,z,block)"
+    },
+    vterrain: {
+      min: 4,
+      max: 5,
+      form: "gfx.vterrain(heights, top, sub, deep [, subdepth])"
+    },
+    vworld: {
+      min: 1,
+      max: 1,
+      form: "gfx.vworld{w=,d=,h=,chunk=}"
+    },
+    zclear: {
+      min: 0,
+      max: 0,
+      form: "gfx.zclear()"
+    }
+  }
+};
+
 // ../shared/src/lualint.ts
 var GFX_MEMBERS = /* @__PURE__ */ new Set([
   "clear",
@@ -368,19 +562,87 @@ var GFX_MEMBERS = /* @__PURE__ */ new Set([
   "floor",
   // engine v11: the whole-model pipeline. These were missing here, so the
   // linter told every 3D app that gfx.mesh "does not exist and calling it
-  // crashes" — including the two that ship and run on it.
+  // crashes", including the two that ship and run on it.
   "mload",
   "munload",
   "zclear",
   "mcam",
   "mpose",
   "mesh",
+  // engine v17: the voxel world. The grid, its mesher and its rasteriser all
+  // live in C, a Lua chunk mesher costs 212-246ms per chunk on device and a
+  // 16x16x24 chunk trips the frame watchdog outright (PLAN-voxel-game.md).
+  "vworld",
+  "vset",
+  "vget",
+  "vfill",
+  "vterrain",
+  "vblock",
+  "vpattern",
+  "vlod",
+  "vray",
+  "vbox",
+  "vsave",
+  "vload",
+  "vdraw",
   // engine v14: the live canvas size, plain numbers on the gfx table
   // (480x320 for "hires": true manifests, 240x160 legacy).
   "w",
   "h"
 ]);
-var GFX_ASSETLESS = /* @__PURE__ */ new Set(["clear", "rect", "line", "circle", "text", "tri"]);
+var GFX_NEEDS = {
+  // Shapes, text and the two plain size values.
+  clear: "none",
+  rect: "none",
+  line: "none",
+  circle: "none",
+  text: "none",
+  tri: "none",
+  vline: "none",
+  w: "none",
+  h: "none",
+  // Meshes (engine v11+). Geometry can come from a Lua table, so the whole
+  // model pipeline works with nothing on disk.
+  mload: "none",
+  munload: "none",
+  mcam: "none",
+  mpose: "none",
+  mesh: "none",
+  zclear: "none",
+  // Block worlds (engine v17). Entirely procedural: the grid is allocated in
+  // PSRAM, filled from Lua, meshed and rasterised in C.
+  vworld: "none",
+  vset: "none",
+  vget: "none",
+  vfill: "none",
+  vterrain: "none",
+  vblock: "none",
+  vpattern: "none",
+  vlod: "none",
+  vray: "none",
+  vbox: "none",
+  vsave: "none",
+  vload: "none",
+  vdraw: "none",
+  // A palette remap table, used by gfx.texcol and by gfx.mesh's smap argument.
+  shademap: "none",
+  // Asset-backed.
+  sprite: "sheet",
+  ssprite: "sheet",
+  texcol: "sheet",
+  image: "image",
+  tload: "terrain",
+  terrain: "terrain",
+  theight: "terrain",
+  floor: "terrain",
+  map: "sheet"
+};
+var NEEDS_MESSAGE = {
+  sheet: "draws cells of a sprite sheet (assets/sprites.vsp) and this app ships none, so it draws nothing at all. It does not raise, which makes it hard to spot: the app runs and the screen stays empty. Use gfx.rect / gfx.circle / gfx.tri / gfx.text, or the block-world calls, which need no files.",
+  image: "reads assets/images/{name}.vsp and this app ships none, so it returns false and draws nothing rather than raising. Draw the scene with shapes, or build it out of blocks with gfx.vworld.",
+  terrain: "needs a heightfield loaded by gfx.tload, and this app ships no assets/terrain files, so it returns false and draws nothing. For 3D with no asset pipeline use the mesh calls (gfx.mload with a Lua table) or the block-world calls.",
+  model: "in this form reads assets/models/{name}.vmesh, which this app does not ship. Pass a model TABLE instead: gfx.mload{verts = {...}, faces = {...}} builds the same mesh from Lua with no file."
+};
 var VUPP_MEMBERS = /* @__PURE__ */ new Set([
   "btn",
   "btnp",
@@ -404,46 +666,34 @@ var VUPP_LIFECYCLE = /* @__PURE__ */ new Set(["init", "update", "draw", "on_exit
 var VUPP_CAPABILITY_GATED = { touch: "touch", canvas: "canvas" };
 var APP_CAPABILITIES = ["touch", "canvas"];
 var APP_CATEGORIES = ["game", "creative", "music", "learning", "rewards"];
-var COLOR_ARG = {
-  clear: 1,
-  rect: 5,
-  line: 5,
-  circle: 4,
-  text: 4,
-  tri: 7
-};
-var GFX_SIGNATURE = {
-  clear: { min: 1, max: 1, form: "gfx.clear(color)" },
-  rect: { min: 5, max: 6, form: "gfx.rect(x, y, w, h, color [, filled])" },
-  line: { min: 5, max: 5, form: "gfx.line(x1, y1, x2, y2, color)" },
-  circle: { min: 4, max: 5, form: "gfx.circle(x, y, r, color [, filled])" },
-  text: { min: 4, max: 5, form: "gfx.text(str, x, y, color [, size])" },
-  tri: { min: 7, max: 7, form: "gfx.tri(x0, y0, x1, y1, x2, y2, color)" }
-};
+var GFX_SIGNATURE = engine_signatures_default.gfx;
+var COLOR_ARG = Object.fromEntries(
+  Object.entries(GFX_SIGNATURE).filter(([, s]) => s.color !== void 0).map(([name, s]) => [name, s.color])
+);
 var BANNED_CALLS = {
   require: 'vupp.import("name")',
   dofile: 'vupp.import("name")',
   loadfile: 'vupp.import("name")',
-  load: "nothing \u2014 the sandbox removes it. Write the code directly.",
-  collectgarbage: "nothing \u2014 the engine manages memory."
+  load: "nothing, the sandbox removes it. Write the code directly.",
+  collectgarbage: "nothing, the engine manages memory."
 };
 var BANNED_TABLES = {
   os: "vupp.time() for elapsed seconds",
   io: "vupp.store.set/get to save anything",
   package: 'vupp.import("name")',
-  debug: "nothing \u2014 remove it",
-  coroutine: "nothing \u2014 the sandbox does not open it. Use a state variable.",
-  love: "the vupp and gfx tables \u2014 this is not LOVE"
+  debug: "nothing, remove it",
+  coroutine: "nothing, the sandbox does not open it. Use a state variable.",
+  love: "the vupp and gfx tables, this is not LOVE"
 };
 var BANNED_GLOBALS = {
   cls: "gfx.clear(color)",
   pset: "gfx.rect(x, y, 1, 1, color, true)",
-  spr: "gfx.sprite \u2014 which needs an asset file",
+  spr: "gfx.sprite, which needs an asset file",
   flr: "math.floor",
   rnd: "vupp.rand",
   sfx: "vupp.tone(freq, ms)",
-  camera: "nothing \u2014 offset your own coordinates",
-  pal: "nothing \u2014 colours are fixed palette indices"
+  camera: "nothing, offset your own coordinates",
+  pal: "nothing, colours are fixed palette indices"
 };
 function longBracketLevel(src, at) {
   if (src[at] !== "[") return null;
@@ -526,6 +776,38 @@ function view(src, spans, keep) {
   }
   return out.join("");
 }
+function codeWithStringFiller(src, spans) {
+  const out = src.split("");
+  for (const s of spans) {
+    if (s.kind === "code") continue;
+    for (let i = s.start; i < s.end; i++) {
+      if (out[i] === "\n") continue;
+      out[i] = s.kind === "string" ? "_" : " ";
+    }
+  }
+  return out.join("");
+}
+function blockEnd(code, from) {
+  const re = /\b(function|if|do|repeat|end|until)\b/g;
+  re.lastIndex = from;
+  let depth = 1;
+  for (let m = re.exec(code); m; m = re.exec(code)) {
+    if (m[1] === "end" || m[1] === "until") {
+      if (--depth === 0) return m.index;
+    } else depth++;
+  }
+  return code.length;
+}
+function maskNestedGfxScopes(body) {
+  let out = body;
+  const re = /\bfunction\b[^(\n]*\([^)]*\bgfx\b[^)]*\)/g;
+  for (let m = re.exec(body); m; m = re.exec(body)) {
+    const start = m.index;
+    const end = blockEnd(body, start + m[0].length);
+    out = out.slice(0, start) + " ".repeat(end - start) + out.slice(end);
+  }
+  return out;
+}
 function lineIndex(src) {
   const starts = [0];
   for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
@@ -590,6 +872,7 @@ function lintLua(file, src, opts = {}) {
   const starts = lineIndex(src);
   const code = view(src, spans, ["code"]);
   const live = view(src, spans, ["code", "string"]);
+  const args_ = codeWithStringFiller(src, spans);
   const defined = localNames(code);
   const add = (offset2, rule, message, severity = "error") => problems.push({ file, line: lineAt(starts, offset2), rule, message, severity });
   const seenNonAsciiLines = /* @__PURE__ */ new Set();
@@ -619,14 +902,27 @@ function lintLua(file, src, opts = {}) {
         "gfx-unknown",
         `gfx.${name} does not exist and calling it crashes. The whole gfx table is: ${[...GFX_MEMBERS].join(", ")}.`
       );
-    } else if (!assets && !GFX_ASSETLESS.has(name)) {
-      add(
-        m.index,
-        "gfx-needs-assets",
-        `gfx.${name} reads from an asset file (a sprite sheet, tilemap or terrain) and this app has none, so it will crash. Draw with gfx.rect, gfx.circle, gfx.line, gfx.tri and gfx.text instead.`
-      );
+    } else if (!assets) {
+      const needs = name === "mload" && /^\s*\(\s*["']/.test(live.slice(m.index + m[0].length)) ? "model" : GFX_NEEDS[name] ?? "none";
+      if (needs !== "none") {
+        add(m.index, "gfx-needs-assets", `gfx.${name} ${NEEDS_MESSAGE[needs]}`);
+      }
     }
     m = gfxRe.exec(code);
+  }
+  if (!/(^|\n)\s*gfx\s*=[^=]/.test(code)) {
+    for (const h of code.matchAll(/\bfunction\s+vupp\.(init|update)\s*\([^)]*\)/g)) {
+      const start = (h.index ?? 0) + h[0].length;
+      const body = code.slice(start, blockEnd(code, start));
+      const visible = maskNestedGfxScopes(body);
+      const use = /\bgfx\s*\.\s*[A-Za-z_]/.exec(visible);
+      if (!use) continue;
+      add(
+        start + use.index,
+        "gfx-scope",
+        `gfx does not exist in vupp.${h[1]}, it is the argument to vupp.draw(gfx), so this raises "attempt to index a nil value (global 'gfx')". Setup calls like gfx.vworld, gfx.mload and gfx.tload have to happen on the FIRST FRAME of vupp.draw instead: guard them with a flag. vupp.${h[1]} can still do everything that does not touch gfx.`
+      );
+    }
   }
   const vuppRe = /\bvupp\s*\.\s*([A-Za-z_]\w*)/g;
   m = vuppRe.exec(code);
@@ -650,7 +946,7 @@ function lintLua(file, src, opts = {}) {
       add(
         m.index,
         "vupp-needs-assets",
-        "vupp.sfx plays a WAV from the app package and this app has none. Use vupp.tone(freq, ms, vol, wave) instead \u2014 it needs no files."
+        "vupp.sfx plays a WAV from the app package and this app has none. Use vupp.tone(freq, ms, vol, wave) instead, it needs no files."
       );
     }
     m = vuppRe.exec(code);
@@ -670,7 +966,7 @@ function lintLua(file, src, opts = {}) {
     const re = new RegExp(`(?<![.:\\w])${name}\\s*[("'{]`, "g");
     m = re.exec(code);
     while (m) {
-      add(m.index, "sandbox", `${name} is not available in the Vupp sandbox \u2014 use ${instead}`);
+      add(m.index, "sandbox", `${name} is not available in the Vupp sandbox, use ${instead}`);
       m = re.exec(code);
     }
   }
@@ -682,7 +978,7 @@ function lintLua(file, src, opts = {}) {
       add(
         m.index,
         "sandbox",
-        `The ${name} table does not exist in the Vupp sandbox \u2014 use ${instead}`
+        `The ${name} table does not exist in the Vupp sandbox, use ${instead}`
       );
       m = re.exec(code);
     }
@@ -695,32 +991,32 @@ function lintLua(file, src, opts = {}) {
       add(
         m.index + (m[1]?.length ?? 0),
         "not-pico8",
-        `${name}() is PICO-8/LOVE, not Vupp, and is nil here \u2014 use ${instead}`
+        `${name}() is PICO-8/LOVE, not Vupp, and is nil here, use ${instead}`
       );
       m = re.exec(code);
     }
   }
-  for (const [name, colorArg] of Object.entries(COLOR_ARG)) {
+  for (const [name, sig] of Object.entries(GFX_SIGNATURE)) {
+    const colorArg = COLOR_ARG[name];
     const re = new RegExp(`\\bgfx\\s*\\.\\s*${name}\\s*\\(`, "g");
     m = re.exec(code);
     while (m) {
-      const args = callArgs(code, m.index + m[0].length - 1);
+      const args = callArgs(args_, m.index + m[0].length - 1);
       if (args) {
-        const sig = GFX_SIGNATURE[name];
         const spread = args.some((a) => /\bunpack\b|\.\.\./.test(a));
         if (sig && !spread && (args.length < sig.min || args.length > sig.max)) {
           add(
             m.index,
             "gfx-arity",
-            `gfx.${name} takes ${sig.min === sig.max ? sig.min : `${sig.min} or ${sig.max}`} arguments but got ${args.length}, which crashes with "bad argument". The signature is ${sig.form} \u2014 the colour is the one that gets left off.`
+            `gfx.${name} takes ${sig.min === sig.max ? sig.min : `${sig.min} or ${sig.max}`} arguments but got ${args.length}, which crashes with "bad argument". The signature is ${sig.form}, the colour is the one that gets left off.`
           );
         }
-        const color = args[colorArg - 1]?.trim();
+        const color = colorArg ? args[colorArg - 1]?.trim() : void 0;
         if (color && /^\d+$/.test(color) && Number(color) >= paletteSize && Number(color) !== 255) {
           add(
             m.index,
             "palette-range",
-            `Colour ${color} is outside this app's palette of ${paletteSize} (0..${paletteSize - 1}), so gfx.${name} draws nothing. Colours are palette indices, not hex \u2014 declare more in app.json's "palette" if you need them.`
+            `Colour ${color} is outside this app's palette of ${paletteSize} (0..${paletteSize - 1}), so gfx.${name} draws nothing. Colours are palette indices, not hex, declare more in app.json's "palette" if you need them.`
           );
         }
         if (name === "text") {
@@ -729,7 +1025,7 @@ function lintLua(file, src, opts = {}) {
             add(
               m.index,
               "text-size",
-              `gfx.text size ${size} does not exist \u2014 only 1, 2 and 3 do. Anything a child reads wants 2 or 3.`
+              `gfx.text size ${size} does not exist, only 1, 2 and 3 do. Anything a child reads wants 2 or 3.`
             );
           }
         }
@@ -762,13 +1058,13 @@ function lintManifest(src, opts) {
   if (requireSlug && manifest2.slug !== requireSlug) {
     add(
       "manifest-slug",
-      `"slug" must be exactly "${requireSlug}" \u2014 the preview device installs the app under that name.`
+      `"slug" must be exactly "${requireSlug}", the preview device installs the app under that name.`
     );
   }
   if (typeof manifest2.title !== "string" || !manifest2.title.trim()) {
     add(
       "manifest-title",
-      '"title" must be a non-empty string \u2014 it is the name on the launcher tile.'
+      '"title" must be a non-empty string, it is the name on the launcher tile.'
     );
   }
   if (typeof manifest2.version !== "string") {
@@ -829,7 +1125,7 @@ function lintManifest(src, opts) {
   } else if (hires === true && typeof minEngine === "number" && minEngine < 14) {
     add(
       "manifest-hires",
-      '"hires": true needs "min_engine": 14 \u2014 an older engine would run the app on the 240x160 canvas and every layout coordinate would be wrong.'
+      '"hires": true needs "min_engine": 14, an older engine would run the app on the 240x160 canvas and every layout coordinate would be wrong.'
     );
   }
   return problems;
@@ -968,7 +1264,7 @@ var studioFileSchema = z3.object({
 });
 var writeFilesInputSchema = z3.object({
   /**
-   * The COMPLETE set of files the app should have after this call — the
+   * The COMPLETE set of files the app should have after this call, the
    * project is replaced, not merged. Partial writes would strand a lib/*.lua
    * the model meant to delete, and vupp.import would still load it.
    */
@@ -1002,7 +1298,7 @@ var planStepSchema = z3.object({
 });
 var updatePlanInputSchema = z3.object({
   /**
-   * The COMPLETE list every time, same discipline as write_files — the app
+   * The COMPLETE list every time, same discipline as write_files, the app
    * renders exactly this, so a partial list would silently drop steps.
    *
    * Up to ten because the plan is also the unit of WORK: the model builds one
@@ -1023,7 +1319,7 @@ var editFileInputSchema = z3.object({
   path: z3.string().regex(STUDIO_FILE_PATH_RE),
   /**
    * Must appear EXACTLY ONCE in the file. An ambiguous match is rejected
-   * rather than guessed at — the model can always widen the window.
+   * rather than guessed at, the model can always widen the window.
    */
   old_string: z3.string().min(1).max(64 * 1024),
   new_string: z3.string().max(64 * 1024),
@@ -1058,7 +1354,7 @@ var playtestStepSchema = z3.object({
   wait_ms: z3.number().int().min(0).max(5e3).optional(),
   /** Capture the screen at the end of this step. */
   shot: z3.boolean().optional(),
-  /** What this step is for — shown to the creator and labels the frame. */
+  /** What this step is for, shown to the creator and labels the frame. */
   label: z3.string().max(60).optional()
 });
 var playtestInputSchema = z3.object({
@@ -1097,14 +1393,14 @@ var playtestOutputSchema = z3.object({
       /**
        * Whether the canvas differed across this step. On a game that
        * animates on its own this is true no matter what the button did, so
-       * it is evidence of nothing — look at the frames instead. It is only
+       * it is evidence of nothing, look at the frames instead. It is only
        * conclusive when moves_on_its_own is false.
        */
       screen_changed: z3.boolean()
     })
   ).optional(),
   /**
-   * What the vision sub-agent actually saw, in plain sentences — the answer to
+   * What the vision sub-agent actually saw, in plain sentences, the answer to
    * this playtest's `goal`, plus anything visibly wrong (text off the edge, a
    * score on top of the player, something drawn behind the background).
    */
@@ -1113,7 +1409,7 @@ var playtestOutputSchema = z3.object({
   frames_seen: z3.number().int().optional()
 });
 var lookInputSchema = z3.object({
-  /** The playtest's goal — the question the frames are being asked. */
+  /** The playtest's goal, the question the frames are being asked. */
   goal: z3.string().min(1).max(140),
   /** What was pressed, so the observation can be tied to the actions. */
   steps: z3.array(
@@ -1133,7 +1429,7 @@ var lookOutputSchema = z3.object({
   /**
    * What this look cost, so the app can add it to the build's total.
    *
-   * `null` means the provider did not report a cost — NOT that it was free.
+   * `null` means the provider did not report a cost, NOT that it was free.
    * The distinction matters: the vision sub-agent is the only part of a build
    * that sends images, so it is the line item most likely to be quietly
    * underestimated, and a silent zero here would hide exactly that.
@@ -1147,13 +1443,13 @@ var publishAppInputSchema = z3.object({
   files: z3.array(studioFileSchema).min(1).max(24),
   /** Shown on the launcher tile and the parent's review screen. */
   title: z3.string().min(1).max(48),
-  /** Who made it — "Grandma", "Sam's OT". Free text; it is a label, not an identity. */
+  /** Who made it, "Grandma", "Sam's OT". Free text; it is a label, not an identity. */
   author: z3.string().min(1).max(48),
   /** A sentence from the creator to the parent. Optional. */
   note: z3.string().max(280).optional(),
   /**
    * Publish over an existing family app instead of creating one. Slugs are
-   * immutable across versions — the docstore lives at /sd/docs/lib:{slug}/, so
+   * immutable across versions, the docstore lives at /sd/docs/lib:{slug}/, so
    * a rename would orphan every savegame.
    */
   appId: z3.string().uuid().optional()
@@ -1281,7 +1577,7 @@ async function downloadSimAssets(base, opts = {}) {
     const got = createHash("sha256").update(bytes).digest("hex");
     if (got !== entry.sha256) {
       throw new SimAssetError(
-        `${entry.name} does not match the manifest (expected ${entry.sha256.slice(0, 12)}\u2026, got ${got.slice(0, 12)}\u2026). Refusing to run firmware that arrived corrupted or modified.`
+        `${entry.name} does not match the manifest (expected ${entry.sha256.slice(0, 12)}..., got ${got.slice(0, 12)}...). Refusing to run firmware that arrived corrupted or modified.`
       );
     }
     await writeFile(join(dir, entry.name), bytes);
@@ -1300,7 +1596,7 @@ async function fetchJson(url) {
   try {
     return await res.json();
   } catch {
-    throw new SimAssetError(`${url} did not return JSON \u2014 is that the right base URL?`);
+    throw new SimAssetError(`${url} did not return JSON, is that the right base URL?`);
   }
 }
 
@@ -1370,7 +1666,7 @@ async function ensureBrowser(onProgress = () => {
   const buildId = process.env.VUPP_CHROME_BUILD ?? await resolveBuildId(Browser.CHROMEHEADLESSSHELL, platform, PINNED_BUILD).catch(
     () => PINNED_BUILD
   );
-  onProgress(`no Chrome found \u2014 downloading Chrome headless shell ${buildId} (~80 MB, once)`);
+  onProgress(`no Chrome found, downloading Chrome headless shell ${buildId} (~80 MB, once)`);
   const installed = await install({
     browser: Browser.CHROMEHEADLESSSHELL,
     buildId,
@@ -1453,7 +1749,7 @@ import { resolve as resolve3 } from "path";
 
 // ../app-reference/src/studio-reference.json
 var studio_reference_default = {
-  engine: 16,
+  engine: 17,
   apps: [
     {
       slug: "abc-trace",
@@ -1558,7 +1854,7 @@ var studio_reference_default = {
         "main.lua": `-- luacheck: globals vupp
 -- ABC Trace: a giant letter outline; the kid traces it with a finger.
 -- Sparkles follow the touch, dots along the letter light up gold as they are
--- covered, and scoring is VERY generous (fat radius \u2014 a wobbly 4-year-old
+-- covered, and scoring is VERY generous (fat radius, a wobbly 4-year-old
 -- trace passes). A finished letter celebrates, saves a snapshot for the
 -- parents (vupp.canvas.save), and advances.
 --
@@ -2230,7 +2526,7 @@ end
   }
 }
 `,
-        "main.lua": '-- luacheck: globals vupp\n-- Space Pop: a friendly rocket slides along the bottom (left/right) and\n-- shoots bubbles (A) at big soft space rocks drifting down. Rocks pop into\n-- smaller rocks, the smallest pop into sparkles. Rocks that reach the bottom\n-- just drift past \u2014 nothing can hurt you.\n-- v1.1: waves with a clear-chime and gentle escalation, rocks with faces,\n-- a rare golden rock worth bonus pops, chord pop sounds, milestone\n-- celebrations every 20 pops, a NEW BEST! banner, and a title splash.\n-- Native 480x320 canvas (engine v14, "hires"), default PICO-8 palette\n-- (docs/07-app-library.md). The sky is wide and short: fall speeds are\n-- scaled to the vertical span, the ship slides faster to cover the wider\n-- bottom edge.\n\nlocal SHIP_Y = 268\nlocal ship = { x = 240 }\nlocal bubbles = {}        -- {x, y}\nlocal rocks = {}          -- {x, y, size 3|2|1, wob, spd, drift, face, gold}\nlocal sparks = {}         -- {x, y, vx, vy, life, c}\nlocal starsBg = {}        -- fixed background stars\nlocal state = "title"     -- "title" | "play"\nlocal wave = 1\nlocal quota = 3           -- big rocks in the current wave\nlocal spawned = 0\nlocal interT = 0          -- between-wave breather\nlocal spawnT = 0.5\nlocal goldenUp = false    -- one golden rock at a time\nlocal pops = 0\nlocal bestPops = 0\nlocal bestWave = 1\nlocal prevBest = 0        -- best at session start (for the NEW BEST moment)\nlocal bestShown = false\nlocal bannerT = 0\nlocal bannerStr = ""\nlocal bannerC = 7\nlocal bannerSize = 2\nlocal shootCd = 0\nlocal t = 0\nlocal toneq = {}\n\nlocal ROCK_R = { 12, 20, 32 }      -- by size index\nlocal ROCK_SPD = { 40, 32, 22 }    -- px/s, scaled to the 320px-tall sky\nlocal POP_FREQ = { 700, 480, 320 }\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function setBanner(str, c, size, secs)\n  bannerStr = str\n  bannerC = c\n  bannerSize = size\n  bannerT = secs\nend\n\nlocal function sparkBurst(x, y, n, cols)\n  for _ = 1, n do\n    sparks[#sparks + 1] = {\n      x = x, y = y,\n      vx = (vupp.rand(100) - 50) * 2.4,\n      vy = (vupp.rand(100) - 50) * 2.4,\n      life = 0.5,\n      c = cols[vupp.rand(#cols)],\n    }\n  end\nend\n\nlocal function spdMul()\n  return 1 + math.min(wave - 1, 8) * 0.06\nend\n\nlocal function spawnRock()\n  local gold = false\n  if wave >= 2 and not goldenUp and vupp.rand(8) == 1 then\n    gold = true\n    goldenUp = true\n  end\n  rocks[#rocks + 1] = {\n    x = 40 + vupp.rand(400),\n    y = -40,\n    size = gold and 2 or 3,\n    wob = vupp.rand(628) / 100,\n    spd = (gold and (ROCK_SPD[2] + 20) * 1.35 or (ROCK_SPD[3] + vupp.rand(6) * 2)) * spdMul(),\n    drift = 0,\n    face = vupp.rand(3),\n    gold = gold,\n  }\nend\n\nlocal function popRock(idx)\n  local r = rocks[idx]\n  table.remove(rocks, idx)\n  if r.gold then\n    goldenUp = false\n    pops = pops + 5                          -- bonus pops!\n    sparkBurst(r.x, r.y, 14, { 10, 9, 7 })\n    setBanner("+5", 10, 3, 1.2)\n    scheduleTone(0.00, 784, 90)\n    scheduleTone(0.10, 988, 90)\n    scheduleTone(0.20, 1175, 90)\n    scheduleTone(0.32, 1568, 220)\n    vupp.emit("space.golden", { pops = pops })\n  else\n    pops = pops + 1\n    -- chord blip: root + a third, deeper for bigger rocks\n    local f = POP_FREQ[r.size] + math.min(pops * 2, 200)\n    vupp.tone(f, 70, 0.7)\n    vupp.tone(math.floor(f * 1.26), 70, 0.4)\n  end\n  if pops > bestPops then\n    bestPops = pops\n    vupp.store.set("best_pops", bestPops)  -- hard-exit safe\n    if not bestShown and prevBest >= 10 then\n      bestShown = true                      -- the record just fell!\n      setBanner("new best!", 8, 3, 2.2)\n      sparkBurst(240, 160, 12, { 10, 7 })\n      scheduleTone(0.45, 784, 90)\n      scheduleTone(0.55, 988, 90)\n      scheduleTone(0.68, 1319, 240)\n    end\n  end\n  if pops % 20 == 0 then\n    vupp.emit("space.pops", { pops = pops })\n    if bannerT <= 0 then\n      setBanner(tostring(pops) .. " pops!", 10, 3, 1.6)\n    end\n    sparkBurst(r.x, r.y, 12, { 7, 10, 14 })\n    scheduleTone(0.10, 659, 80)\n    scheduleTone(0.18, 784, 80)\n    scheduleTone(0.26, 988, 140)\n  end\n  if r.gold then\n    return\n  end\n  if r.size > 1 then\n    for dir = -1, 1, 2 do\n      rocks[#rocks + 1] = {\n        x = r.x + dir * 12,\n        y = r.y,\n        size = r.size - 1,\n        wob = vupp.rand(628) / 100,\n        spd = (ROCK_SPD[r.size - 1] + vupp.rand(8) * 2) * spdMul(),\n        drift = dir * 28,\n        face = vupp.rand(3),\n        gold = false,\n      }\n    end\n  else\n    sparkBurst(r.x, r.y, 8, { 7, 10, 14 })\n  end\nend\n\nfunction vupp.init()\n  bestPops = vupp.store.get("best_pops", 0)\n  bestWave = vupp.store.get("best_wave", 1)\n  prevBest = bestPops\n  for i = 1, 24 do\n    starsBg[i] = { x = vupp.rand(476), y = vupp.rand(300), c = (i % 3 == 0) and 6 or 5 }\n  end\nend\n\nlocal function updatePlay(dt)\n  if vupp.btn("left") then\n    ship.x = math.max(24, ship.x - 280 * dt)\n  elseif vupp.btn("right") then\n    ship.x = math.min(456, ship.x + 280 * dt)\n  end\n\n  shootCd = math.max(0, shootCd - dt)\n  if vupp.btnp("a") and shootCd == 0 and #bubbles < 4 then\n    bubbles[#bubbles + 1] = { x = math.floor(ship.x), y = SHIP_Y - 32 }\n    shootCd = 0.15\n    vupp.tone(880, 40, 0.5)\n  end\n\n  -- wave flow: spawn the quota, breathe when the sky is clear, escalate\n  if interT > 0 then\n    interT = interT - dt\n    if interT <= 0 then\n      wave = wave + 1\n      if wave > bestWave then\n        bestWave = wave\n        vupp.store.set("best_wave", bestWave)\n      end\n      quota = math.min(2 + wave, 8)\n      spawned = 0\n      spawnT = 0.8\n    end\n  elseif spawned < quota then\n    spawnT = spawnT - dt\n    if spawnT <= 0 then\n      spawnRock()\n      spawned = spawned + 1\n      spawnT = math.max(1.2, 2.3 - wave * 0.12)\n    end\n  elseif #rocks == 0 then\n    interT = 1.8                     -- wave clear! chime + banner, then more\n    setBanner("wave " .. tostring(wave) .. " clear!", 11, 2, 1.8)\n    scheduleTone(0.00, 523, 90)\n    scheduleTone(0.10, 659, 90)\n    scheduleTone(0.20, 784, 160)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y - 220 * dt\n    local hit = false\n    for j = 1, #rocks do\n      local r = rocks[j]\n      local dx = b.x - r.x\n      local dy = b.y - r.y\n      local rr = ROCK_R[r.size] + 6\n      if dx * dx + dy * dy < rr * rr then\n        popRock(j)\n        hit = true\n        break\n      end\n    end\n    if hit or b.y < -8 then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  i = 1\n  while i <= #rocks do\n    local r = rocks[i]\n    r.y = r.y + r.spd * dt\n    r.x = r.x + r.drift * dt + math.sin(t * 2 + r.wob) * 20 * dt\n    r.drift = r.drift * (1 - dt)  -- split kick fades\n    if r.y > 360 then\n      if r.gold then\n        goldenUp = false           -- the golden one got away \u2014 another will come\n      end\n      table.remove(rocks, i)       -- drifts past harmlessly\n    else\n      i = i + 1\n    end\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n  bannerT = math.max(0, bannerT - dt)\n\n  if state == "title" then\n    if vupp.btnp("a") or vupp.btnp("left") or vupp.btnp("right") then\n      state = "play"\n      vupp.tone(660, 60, 0.5)\n    end\n  else\n    updatePlay(dt)\n  end\n\n  local i = 1\n  while i <= #sparks do\n    local s = sparks[i]\n    s.life = s.life - dt\n    if s.life <= 0 then\n      table.remove(sparks, i)\n    else\n      s.x = s.x + s.vx * dt\n      s.y = s.y + s.vy * dt\n      i = i + 1\n    end\n  end\nend\n\nlocal function drawRock(gfx, r)\n  local rad = ROCK_R[r.size]\n  local x = math.floor(r.x)\n  local y = math.floor(r.y)\n  local body = r.gold and 10 or 6\n  local edge = r.gold and 9 or 5\n  gfx.circle(x, y, rad, body, true)\n  gfx.circle(x, y, rad, edge, false)\n  if r.gold then\n    -- twinkling golden rock\n    local tw = (math.floor(t * 6) % 2) * 2\n    gfx.rect(x - 12 + tw, y - 14, 4, 4, 7, true)\n    gfx.rect(x + 10, y + 6 + tw, 4, 4, 7, true)\n    gfx.circle(x - 6, y - 6, 4, 9, true)\n  else\n    gfx.circle(x - math.floor(rad / 3), y - math.floor(rad / 4),\n               math.max(2, math.floor(rad / 4)), 5, true)\n    gfx.circle(x + math.floor(rad / 3), y + math.floor(rad / 3),\n               math.max(2, math.floor(rad / 5)), 5, true)\n  end\n  if r.size == 3 then\n    gfx.circle(x + 8, y - 10, 4, 13, true)\n  end\n  -- rock personality (big enough rocks only)\n  if r.size >= 2 or r.gold then\n    local e = math.max(4, math.floor(rad / 4))\n    if r.face == 1 then           -- happy: dot eyes + smile\n      gfx.circle(x - e, y - 2, 2, 1, true)\n      gfx.circle(x + e, y - 2, 2, 1, true)\n      gfx.line(x - 4, y + e, x + 4, y + e, 1)\n      gfx.rect(x - 6, y + e - 2, 2, 2, 1, true)\n      gfx.rect(x + 6, y + e - 2, 2, 2, 1, true)\n    elseif r.face == 2 then       -- sleepy: closed eyes\n      gfx.line(x - e - 2, y - 2, x - e + 2, y - 2, 1)\n      gfx.line(x + e - 2, y - 2, x + e + 2, y - 2, 1)\n      gfx.rect(x - 2, y + e, 4, 2, 1, true)\n    else                          -- surprised: round eyes + o mouth\n      gfx.circle(x - e, y - 2, 2, 1, false)\n      gfx.circle(x + e, y - 2, 2, 1, false)\n      gfx.circle(x, y + e, 2, 1, true)\n    end\n  end\nend\n\nlocal function drawShip(gfx)\n  local x = math.floor(ship.x)\n  local flame = math.floor(math.abs(math.sin(t * 12)) * 8)\n  gfx.rect(x - 4, SHIP_Y + 20, 8, 6 + flame, 9, true)   -- flame\n  gfx.rect(x - 2, SHIP_Y + 20, 4, 4 + flame, 10, true)\n  gfx.rect(x - 12, SHIP_Y - 16, 24, 36, 7, true)        -- body\n  gfx.circle(x, SHIP_Y - 16, 12, 8, true)               -- nose cone\n  gfx.circle(x, SHIP_Y - 4, 8, 12, true)                -- window\n  gfx.circle(x - 2, SHIP_Y - 6, 2, 7, true)\n  gfx.rect(x - 18, SHIP_Y + 8, 6, 12, 8, true)          -- fins\n  gfx.rect(x + 12, SHIP_Y + 8, 6, 12, 8, true)\nend\n\nlocal function drawTitle(gfx)\n  gfx.text("space pop", 188, 38, 1, 3)\n  gfx.text("space pop", 186, 36, 7, 3)\n\n  -- a big happy rock floating under the title\n  local demo = { x = 240, y = 124 + math.sin(t * 2) * 8, size = 3,\n                 wob = 0, spd = 0, drift = 0, face = 1, gold = false }\n  drawRock(gfx, demo)\n\n  -- controls on one wide row: arrows move, A pops\n  gfx.tri(116, 180, 116, 204, 96, 192, 7)               -- left arrow\n  gfx.tri(188, 180, 188, 204, 208, 192, 7)              -- right arrow\n  gfx.text("move", 136, 186, 6, 2)\n  local pr = 16 + math.floor(math.abs(math.sin(t * 3)) * 4)\n  gfx.circle(312, 192, pr, 7, true)\n  gfx.circle(312, 192, pr, 6, false)\n  gfx.text("a", 306, 183, 0, 3)\n  gfx.text("pop", 348, 186, 6, 2)\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(0)\n  for i = 1, #starsBg do\n    local s = starsBg[i]\n    gfx.rect(s.x, s.y, 2, 2, s.c, true)\n  end\n\n  if state == "title" then\n    drawTitle(gfx)\n    drawShip(gfx)\n    return\n  end\n\n  -- pops (left), wave label (center), best-with-star (right), one wide row\n  gfx.text(tostring(pops), 16, 16, 7, 3)\n  local wl = "wave " .. tostring(wave)\n  gfx.text(wl, 240 - #wl * 4, 24, 6, 2)\n  gfx.circle(396, 26, 8, 10, true)\n  gfx.circle(396, 26, 4, 9, true)\n  gfx.text(tostring(bestPops), 412, 16, 10, 3)\n\n  for i = 1, #rocks do\n    drawRock(gfx, rocks[i])\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), 6, 12, false)\n    gfx.circle(math.floor(b.x) - 2, math.floor(b.y) - 2, 2, 7, true)\n  end\n\n  for i = 1, #sparks do\n    local s = sparks[i]\n    gfx.rect(math.floor(s.x), math.floor(s.y), 4, 4, s.c, true)\n  end\n\n  drawShip(gfx)\n\n  -- celebration banner (wave clear / milestones / new best / golden bonus)\n  if bannerT > 0 then\n    local w = #bannerStr * 4 * bannerSize + 32\n    local x = 240 - math.floor(w / 2)\n    local h = 16 + 6 * bannerSize\n    gfx.rect(x, 120, w, h, 7, true)\n    gfx.rect(x, 120, w, h, bannerC, false)\n    gfx.text(bannerStr, x + 16, 120 + math.floor((h - 6 * bannerSize) / 2) + 1,\n             bannerC, bannerSize)\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Space Pop: a friendly rocket slides along the bottom (left/right) and\n-- shoots bubbles (A) at big soft space rocks drifting down. Rocks pop into\n-- smaller rocks, the smallest pop into sparkles. Rocks that reach the bottom\n-- just drift past, nothing can hurt you.\n-- v1.1: waves with a clear-chime and gentle escalation, rocks with faces,\n-- a rare golden rock worth bonus pops, chord pop sounds, milestone\n-- celebrations every 20 pops, a NEW BEST! banner, and a title splash.\n-- Native 480x320 canvas (engine v14, "hires"), default PICO-8 palette\n-- (docs/07-app-library.md). The sky is wide and short: fall speeds are\n-- scaled to the vertical span, the ship slides faster to cover the wider\n-- bottom edge.\n\nlocal SHIP_Y = 268\nlocal ship = { x = 240 }\nlocal bubbles = {}        -- {x, y}\nlocal rocks = {}          -- {x, y, size 3|2|1, wob, spd, drift, face, gold}\nlocal sparks = {}         -- {x, y, vx, vy, life, c}\nlocal starsBg = {}        -- fixed background stars\nlocal state = "title"     -- "title" | "play"\nlocal wave = 1\nlocal quota = 3           -- big rocks in the current wave\nlocal spawned = 0\nlocal interT = 0          -- between-wave breather\nlocal spawnT = 0.5\nlocal goldenUp = false    -- one golden rock at a time\nlocal pops = 0\nlocal bestPops = 0\nlocal bestWave = 1\nlocal prevBest = 0        -- best at session start (for the NEW BEST moment)\nlocal bestShown = false\nlocal bannerT = 0\nlocal bannerStr = ""\nlocal bannerC = 7\nlocal bannerSize = 2\nlocal shootCd = 0\nlocal t = 0\nlocal toneq = {}\n\nlocal ROCK_R = { 12, 20, 32 }      -- by size index\nlocal ROCK_SPD = { 40, 32, 22 }    -- px/s, scaled to the 320px-tall sky\nlocal POP_FREQ = { 700, 480, 320 }\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function setBanner(str, c, size, secs)\n  bannerStr = str\n  bannerC = c\n  bannerSize = size\n  bannerT = secs\nend\n\nlocal function sparkBurst(x, y, n, cols)\n  for _ = 1, n do\n    sparks[#sparks + 1] = {\n      x = x, y = y,\n      vx = (vupp.rand(100) - 50) * 2.4,\n      vy = (vupp.rand(100) - 50) * 2.4,\n      life = 0.5,\n      c = cols[vupp.rand(#cols)],\n    }\n  end\nend\n\nlocal function spdMul()\n  return 1 + math.min(wave - 1, 8) * 0.06\nend\n\nlocal function spawnRock()\n  local gold = false\n  if wave >= 2 and not goldenUp and vupp.rand(8) == 1 then\n    gold = true\n    goldenUp = true\n  end\n  rocks[#rocks + 1] = {\n    x = 40 + vupp.rand(400),\n    y = -40,\n    size = gold and 2 or 3,\n    wob = vupp.rand(628) / 100,\n    spd = (gold and (ROCK_SPD[2] + 20) * 1.35 or (ROCK_SPD[3] + vupp.rand(6) * 2)) * spdMul(),\n    drift = 0,\n    face = vupp.rand(3),\n    gold = gold,\n  }\nend\n\nlocal function popRock(idx)\n  local r = rocks[idx]\n  table.remove(rocks, idx)\n  if r.gold then\n    goldenUp = false\n    pops = pops + 5                          -- bonus pops!\n    sparkBurst(r.x, r.y, 14, { 10, 9, 7 })\n    setBanner("+5", 10, 3, 1.2)\n    scheduleTone(0.00, 784, 90)\n    scheduleTone(0.10, 988, 90)\n    scheduleTone(0.20, 1175, 90)\n    scheduleTone(0.32, 1568, 220)\n    vupp.emit("space.golden", { pops = pops })\n  else\n    pops = pops + 1\n    -- chord blip: root + a third, deeper for bigger rocks\n    local f = POP_FREQ[r.size] + math.min(pops * 2, 200)\n    vupp.tone(f, 70, 0.7)\n    vupp.tone(math.floor(f * 1.26), 70, 0.4)\n  end\n  if pops > bestPops then\n    bestPops = pops\n    vupp.store.set("best_pops", bestPops)  -- hard-exit safe\n    if not bestShown and prevBest >= 10 then\n      bestShown = true                      -- the record just fell!\n      setBanner("new best!", 8, 3, 2.2)\n      sparkBurst(240, 160, 12, { 10, 7 })\n      scheduleTone(0.45, 784, 90)\n      scheduleTone(0.55, 988, 90)\n      scheduleTone(0.68, 1319, 240)\n    end\n  end\n  if pops % 20 == 0 then\n    vupp.emit("space.pops", { pops = pops })\n    if bannerT <= 0 then\n      setBanner(tostring(pops) .. " pops!", 10, 3, 1.6)\n    end\n    sparkBurst(r.x, r.y, 12, { 7, 10, 14 })\n    scheduleTone(0.10, 659, 80)\n    scheduleTone(0.18, 784, 80)\n    scheduleTone(0.26, 988, 140)\n  end\n  if r.gold then\n    return\n  end\n  if r.size > 1 then\n    for dir = -1, 1, 2 do\n      rocks[#rocks + 1] = {\n        x = r.x + dir * 12,\n        y = r.y,\n        size = r.size - 1,\n        wob = vupp.rand(628) / 100,\n        spd = (ROCK_SPD[r.size - 1] + vupp.rand(8) * 2) * spdMul(),\n        drift = dir * 28,\n        face = vupp.rand(3),\n        gold = false,\n      }\n    end\n  else\n    sparkBurst(r.x, r.y, 8, { 7, 10, 14 })\n  end\nend\n\nfunction vupp.init()\n  bestPops = vupp.store.get("best_pops", 0)\n  bestWave = vupp.store.get("best_wave", 1)\n  prevBest = bestPops\n  for i = 1, 24 do\n    starsBg[i] = { x = vupp.rand(476), y = vupp.rand(300), c = (i % 3 == 0) and 6 or 5 }\n  end\nend\n\nlocal function updatePlay(dt)\n  if vupp.btn("left") then\n    ship.x = math.max(24, ship.x - 280 * dt)\n  elseif vupp.btn("right") then\n    ship.x = math.min(456, ship.x + 280 * dt)\n  end\n\n  shootCd = math.max(0, shootCd - dt)\n  if vupp.btnp("a") and shootCd == 0 and #bubbles < 4 then\n    bubbles[#bubbles + 1] = { x = math.floor(ship.x), y = SHIP_Y - 32 }\n    shootCd = 0.15\n    vupp.tone(880, 40, 0.5)\n  end\n\n  -- wave flow: spawn the quota, breathe when the sky is clear, escalate\n  if interT > 0 then\n    interT = interT - dt\n    if interT <= 0 then\n      wave = wave + 1\n      if wave > bestWave then\n        bestWave = wave\n        vupp.store.set("best_wave", bestWave)\n      end\n      quota = math.min(2 + wave, 8)\n      spawned = 0\n      spawnT = 0.8\n    end\n  elseif spawned < quota then\n    spawnT = spawnT - dt\n    if spawnT <= 0 then\n      spawnRock()\n      spawned = spawned + 1\n      spawnT = math.max(1.2, 2.3 - wave * 0.12)\n    end\n  elseif #rocks == 0 then\n    interT = 1.8                     -- wave clear! chime + banner, then more\n    setBanner("wave " .. tostring(wave) .. " clear!", 11, 2, 1.8)\n    scheduleTone(0.00, 523, 90)\n    scheduleTone(0.10, 659, 90)\n    scheduleTone(0.20, 784, 160)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y - 220 * dt\n    local hit = false\n    for j = 1, #rocks do\n      local r = rocks[j]\n      local dx = b.x - r.x\n      local dy = b.y - r.y\n      local rr = ROCK_R[r.size] + 6\n      if dx * dx + dy * dy < rr * rr then\n        popRock(j)\n        hit = true\n        break\n      end\n    end\n    if hit or b.y < -8 then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  i = 1\n  while i <= #rocks do\n    local r = rocks[i]\n    r.y = r.y + r.spd * dt\n    r.x = r.x + r.drift * dt + math.sin(t * 2 + r.wob) * 20 * dt\n    r.drift = r.drift * (1 - dt)  -- split kick fades\n    if r.y > 360 then\n      if r.gold then\n        goldenUp = false           -- the golden one got away, another will come\n      end\n      table.remove(rocks, i)       -- drifts past harmlessly\n    else\n      i = i + 1\n    end\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n  bannerT = math.max(0, bannerT - dt)\n\n  if state == "title" then\n    if vupp.btnp("a") or vupp.btnp("left") or vupp.btnp("right") then\n      state = "play"\n      vupp.tone(660, 60, 0.5)\n    end\n  else\n    updatePlay(dt)\n  end\n\n  local i = 1\n  while i <= #sparks do\n    local s = sparks[i]\n    s.life = s.life - dt\n    if s.life <= 0 then\n      table.remove(sparks, i)\n    else\n      s.x = s.x + s.vx * dt\n      s.y = s.y + s.vy * dt\n      i = i + 1\n    end\n  end\nend\n\nlocal function drawRock(gfx, r)\n  local rad = ROCK_R[r.size]\n  local x = math.floor(r.x)\n  local y = math.floor(r.y)\n  local body = r.gold and 10 or 6\n  local edge = r.gold and 9 or 5\n  gfx.circle(x, y, rad, body, true)\n  gfx.circle(x, y, rad, edge, false)\n  if r.gold then\n    -- twinkling golden rock\n    local tw = (math.floor(t * 6) % 2) * 2\n    gfx.rect(x - 12 + tw, y - 14, 4, 4, 7, true)\n    gfx.rect(x + 10, y + 6 + tw, 4, 4, 7, true)\n    gfx.circle(x - 6, y - 6, 4, 9, true)\n  else\n    gfx.circle(x - math.floor(rad / 3), y - math.floor(rad / 4),\n               math.max(2, math.floor(rad / 4)), 5, true)\n    gfx.circle(x + math.floor(rad / 3), y + math.floor(rad / 3),\n               math.max(2, math.floor(rad / 5)), 5, true)\n  end\n  if r.size == 3 then\n    gfx.circle(x + 8, y - 10, 4, 13, true)\n  end\n  -- rock personality (big enough rocks only)\n  if r.size >= 2 or r.gold then\n    local e = math.max(4, math.floor(rad / 4))\n    if r.face == 1 then           -- happy: dot eyes + smile\n      gfx.circle(x - e, y - 2, 2, 1, true)\n      gfx.circle(x + e, y - 2, 2, 1, true)\n      gfx.line(x - 4, y + e, x + 4, y + e, 1)\n      gfx.rect(x - 6, y + e - 2, 2, 2, 1, true)\n      gfx.rect(x + 6, y + e - 2, 2, 2, 1, true)\n    elseif r.face == 2 then       -- sleepy: closed eyes\n      gfx.line(x - e - 2, y - 2, x - e + 2, y - 2, 1)\n      gfx.line(x + e - 2, y - 2, x + e + 2, y - 2, 1)\n      gfx.rect(x - 2, y + e, 4, 2, 1, true)\n    else                          -- surprised: round eyes + o mouth\n      gfx.circle(x - e, y - 2, 2, 1, false)\n      gfx.circle(x + e, y - 2, 2, 1, false)\n      gfx.circle(x, y + e, 2, 1, true)\n    end\n  end\nend\n\nlocal function drawShip(gfx)\n  local x = math.floor(ship.x)\n  local flame = math.floor(math.abs(math.sin(t * 12)) * 8)\n  gfx.rect(x - 4, SHIP_Y + 20, 8, 6 + flame, 9, true)   -- flame\n  gfx.rect(x - 2, SHIP_Y + 20, 4, 4 + flame, 10, true)\n  gfx.rect(x - 12, SHIP_Y - 16, 24, 36, 7, true)        -- body\n  gfx.circle(x, SHIP_Y - 16, 12, 8, true)               -- nose cone\n  gfx.circle(x, SHIP_Y - 4, 8, 12, true)                -- window\n  gfx.circle(x - 2, SHIP_Y - 6, 2, 7, true)\n  gfx.rect(x - 18, SHIP_Y + 8, 6, 12, 8, true)          -- fins\n  gfx.rect(x + 12, SHIP_Y + 8, 6, 12, 8, true)\nend\n\nlocal function drawTitle(gfx)\n  gfx.text("space pop", 188, 38, 1, 3)\n  gfx.text("space pop", 186, 36, 7, 3)\n\n  -- a big happy rock floating under the title\n  local demo = { x = 240, y = 124 + math.sin(t * 2) * 8, size = 3,\n                 wob = 0, spd = 0, drift = 0, face = 1, gold = false }\n  drawRock(gfx, demo)\n\n  -- controls on one wide row: arrows move, A pops\n  gfx.tri(116, 180, 116, 204, 96, 192, 7)               -- left arrow\n  gfx.tri(188, 180, 188, 204, 208, 192, 7)              -- right arrow\n  gfx.text("move", 136, 186, 6, 2)\n  local pr = 16 + math.floor(math.abs(math.sin(t * 3)) * 4)\n  gfx.circle(312, 192, pr, 7, true)\n  gfx.circle(312, 192, pr, 6, false)\n  gfx.text("a", 306, 183, 0, 3)\n  gfx.text("pop", 348, 186, 6, 2)\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(0)\n  for i = 1, #starsBg do\n    local s = starsBg[i]\n    gfx.rect(s.x, s.y, 2, 2, s.c, true)\n  end\n\n  if state == "title" then\n    drawTitle(gfx)\n    drawShip(gfx)\n    return\n  end\n\n  -- pops (left), wave label (center), best-with-star (right), one wide row\n  gfx.text(tostring(pops), 16, 16, 7, 3)\n  local wl = "wave " .. tostring(wave)\n  gfx.text(wl, 240 - #wl * 4, 24, 6, 2)\n  gfx.circle(396, 26, 8, 10, true)\n  gfx.circle(396, 26, 4, 9, true)\n  gfx.text(tostring(bestPops), 412, 16, 10, 3)\n\n  for i = 1, #rocks do\n    drawRock(gfx, rocks[i])\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), 6, 12, false)\n    gfx.circle(math.floor(b.x) - 2, math.floor(b.y) - 2, 2, 7, true)\n  end\n\n  for i = 1, #sparks do\n    local s = sparks[i]\n    gfx.rect(math.floor(s.x), math.floor(s.y), 4, 4, s.c, true)\n  end\n\n  drawShip(gfx)\n\n  -- celebration banner (wave clear / milestones / new best / golden bonus)\n  if bannerT > 0 then\n    local w = #bannerStr * 4 * bannerSize + 32\n    local x = 240 - math.floor(w / 2)\n    local h = 16 + 6 * bannerSize\n    gfx.rect(x, 120, w, h, 7, true)\n    gfx.rect(x, 120, w, h, bannerC, false)\n    gfx.text(bannerStr, x + 16, 120 + math.floor((h - 6 * bannerSize) / 2) + 1,\n             bannerC, bannerSize)\n  end\nend\n'
       }
     },
     {
@@ -2304,7 +2600,777 @@ end
   }
 }
 `,
-        "main.lua": '-- luacheck: globals vupp\n-- Beat Bop: Simon for little ears. Big pads, each with its own note.\n-- The DJ blob sings a short pattern (pads flash); the kid taps it back.\n-- Success grows the pattern by one (up to 8, then a big party). Each party\n-- unlocks the next TIER \u2014 faster songs, fresh voices, and from tier 3 a\n-- fourth pad (the pads become a 2x2 grid, still toddler-sized). Tier shows\n-- as star badges under the blob. A miss just giggles and REPLAYS the same\n-- pattern \u2014 never punitive. B (or the corner note button) toggles free-play\n-- JAM mode: no pattern, every pad always live, the blob dances along.\n-- Canvas 480x320 (landscape, native hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- Layout: the DJ blob keeps a left column (jam button above, star badges and\n-- best below, progress dots as a vertical strip beside it); the pads fill the\n-- right side \u2014 3 tall columns, or a 2x2 grid from tier 3.\n\nlocal PAD_FREQ = { 262, 330, 392, 523 }   -- C E G C\nlocal PAD_COLORS = { 8, 10, 12, 11 }\nlocal PAD_X = 168\nlocal MAX_LEN = 8\nlocal MAX_TIER = 4\n\n-- tier voices per docs/05 tone waves: tri, then sine (faster), then square\n-- (fourth pad joins), then a mix \u2014 higher tiers sound fresh\nlocal TIERS = {\n  { pads = 3, step = 0.55, toneMs = 260, waves = { "tri", "tri", "tri" } },\n  { pads = 3, step = 0.44, toneMs = 210, waves = { "sine", "sine", "sine" } },\n  { pads = 4, step = 0.44, toneMs = 210, waves = { "square", "square", "square", "square" } },\n  { pads = 4, step = 0.36, toneMs = 180, waves = { "tri", "sine", "square", "tri" } },\n}\n\nlocal pattern = {}\nlocal state = "show"       -- "show" | "input" | "miss" | "good" | "party" | "jam"\nlocal stateT = 0\nlocal showIdx = 0\nlocal inputIdx = 0\nlocal flash = { 0, 0, 0, 0 }\nlocal best = 0\nlocal tier = 1             -- highest tier reached; runs always play at it\nlocal newStarT = 0         -- freshly-earned star flashes during the party\nlocal idleT = 0            -- replay help if the kid stalls\nlocal blobBop = 0\nlocal wobble = 0\nlocal jamNotes = {}        -- floating notes while jamming: {x, y, c, life}\nlocal t = 0\nlocal touchWasDown = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms, vol, wave)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms, vol = vol, wave = wave }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    local q = toneq[i]\n    if q.at <= now then\n      vupp.tone(q.freq, q.ms, q.vol or 0.8, q.wave or "tri")\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function padRect(i)\n  if TIERS[tier].pads == 3 then\n    return PAD_X + (i - 1) * 104, 24, 98, 288\n  end\n  local col = (i - 1) % 2\n  local row = i > 2 and 1 or 0\n  return PAD_X + col * 156, 24 + row * 148, 150, 140\nend\n\nlocal function playPad(i)\n  local tt = TIERS[tier]\n  local w = tt.waves[i] or "tri"\n  vupp.tone(PAD_FREQ[i], tt.toneMs, w == "square" and 0.55 or 0.8, w)\n  flash[i] = 0.35\n  blobBop = 0.3\nend\n\nlocal function newPattern(len)\n  pattern = {}\n  for i = 1, len do\n    pattern[i] = vupp.rand(TIERS[tier].pads)\n  end\n  state = "show"\n  stateT = -0.6   -- little breath before the pattern starts\n  showIdx = 0\n  inputIdx = 0\nend\n\nlocal function patternComplete()\n  local len = #pattern\n  if len > best then\n    best = len\n    vupp.store.set("best_streak", best)  -- hard-exit safe\n    vupp.emit("beat.streak", { length = len })\n  end\n  if len >= MAX_LEN then\n    state = "party"\n    stateT = 2.8\n    -- fanfare: square-lead arpeggio, sine octave shimmer, closing chord\n    scheduleTone(0.00, 523, 110, 0.7, "square")\n    scheduleTone(0.00, 1046, 110, 0.35, "sine")\n    scheduleTone(0.13, 659, 110, 0.7, "square")\n    scheduleTone(0.13, 1318, 110, 0.35, "sine")\n    scheduleTone(0.26, 784, 110, 0.7, "square")\n    scheduleTone(0.39, 1047, 110, 0.7, "square")\n    scheduleTone(0.52, 1319, 240, 0.8, "tri")\n    scheduleTone(0.52, 784, 240, 0.5, "sine")\n    scheduleTone(0.52, 523, 240, 0.4, "sine")\n    if tier < MAX_TIER then\n      -- first full song at this tier: the next challenge unlocks\n      tier = tier + 1\n      vupp.store.set("tier", tier)  -- hard-exit safe\n      vupp.emit("beat.tier", { tier = tier })\n      newStarT = 2.8\n    end\n  else\n    state = "good"\n    stateT = 0.9\n    scheduleTone(0.05, 660, 90)\n    scheduleTone(0.18, 880, 140)\n  end\nend\n\nlocal function padPressed(i)\n  if i > TIERS[tier].pads then\n    return\n  end\n  if state == "jam" then\n    -- free play: every pad always live, a note floats up inside the pad\n    playPad(i)\n    local x, y, w, h = padRect(i)\n    jamNotes[#jamNotes + 1] = {\n      x = x + vupp.rand(w) - 1, y = y + math.floor(h / 2), c = PAD_COLORS[i], life = 1,\n    }\n    return\n  end\n  if state ~= "input" then\n    return\n  end\n  playPad(i)\n  idleT = 0\n  if i == pattern[inputIdx + 1] then\n    inputIdx = inputIdx + 1\n    if inputIdx >= #pattern then\n      patternComplete()\n    end\n  else\n    -- a giggle, then the SAME pattern replays\n    state = "miss"\n    stateT = 1.0\n    wobble = 0.6\n    scheduleTone(0.30, 300, 70)\n    scheduleTone(0.40, 220, 70)\n    scheduleTone(0.50, 260, 110)\n  end\nend\n\nlocal function toggleJam()\n  if state == "jam" then\n    vupp.tone(523, 80, 0.6)\n    newPattern(1)\n  else\n    state = "jam"\n    jamNotes = {}\n    vupp.tone(784, 80, 0.6, "sine")\n  end\nend\n\nfunction vupp.init()\n  best = vupp.store.get("best_streak", 0)\n  tier = math.floor(vupp.store.get("tier", 1))\n  if tier < 1 then\n    tier = 1\n  elseif tier > MAX_TIER then\n    tier = MAX_TIER\n  end\n  newPattern(1)\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, 4 do\n    flash[i] = math.max(0, flash[i] - dt)\n  end\n  blobBop = math.max(0, blobBop - dt)\n  wobble = math.max(0, wobble - dt)\n  newStarT = math.max(0, newStarT - dt)\n\n  local i = 1\n  while i <= #jamNotes do\n    local n = jamNotes[i]\n    n.y = n.y - 60 * dt\n    n.life = n.life - dt\n    if n.life <= 0 then\n      table.remove(jamNotes, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if state == "show" then\n    stateT = stateT + dt\n    local step = math.floor(stateT / TIERS[tier].step) + 1\n    if step > showIdx and step <= #pattern then\n      showIdx = step\n      playPad(pattern[step])\n    elseif step > #pattern then\n      state = "input"\n      inputIdx = 0\n      idleT = 0\n    end\n  elseif state == "input" then\n    idleT = idleT + dt\n    if idleT > 6 then\n      -- gentle help: sing it again\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "miss" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "good" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(#pattern + 1)\n    end\n  elseif state == "party" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(1)   -- fresh run at the (maybe just-unlocked) tier\n    end\n  end\n\n  -- B toggles jam mode (engine v7: B belongs to gameplay)\n  if vupp.btnp("b") then\n    toggleJam()\n  end\n\n  -- d-pad chords onto the pads too\n  if TIERS[tier].pads == 3 then\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("down") then\n      padPressed(2)\n    elseif vupp.btnp("right") then\n      padPressed(3)\n    end\n  else\n    -- 2x2 grid: left/up = top row, down/right = bottom row\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("up") then\n      padPressed(2)\n    elseif vupp.btnp("down") then\n      padPressed(3)\n    elseif vupp.btnp("right") then\n      padPressed(4)\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown then\n      if touch.x < 68 and touch.y < 56 then\n        toggleJam()\n      elseif touch.x >= PAD_X - 12 then\n        local pi\n        if TIERS[tier].pads == 3 then\n          pi = math.max(1, math.min(3, math.floor((touch.x - PAD_X) / 104) + 1))\n        else\n          local col = touch.x < PAD_X + 156 and 0 or 1\n          local row = touch.y < 172 and 0 or 1\n          pi = row * 2 + col + 1\n        end\n        padPressed(pi)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawBlob(gfx)\n  local cx, cy = 76, 156\n  local bop = math.floor(blobBop * 40)\n  local ox = 0\n  if wobble > 0 then\n    ox = math.floor(math.sin(wobble * 30) * 8)\n  end\n  if state == "jam" then\n    -- the DJ dances along in free play\n    bop = bop + math.floor(math.abs(math.sin(t * 5)) * 12)\n    ox = ox + math.floor(math.sin(t * 2.5) * 12)\n  end\n  cx = cx + ox\n  cy = cy - bop\n  gfx.circle(cx, cy, 48, 11, true)\n  gfx.circle(cx, cy, 48, 3, false)\n  -- headphones\n  gfx.circle(cx - 44, cy - 4, 12, 5, true)\n  gfx.circle(cx + 44, cy - 4, 12, 5, true)\n  gfx.circle(cx, cy - 24, 50, 5, false)\n  -- face\n  gfx.circle(cx - 16, cy - 10, 6, 0, true)\n  gfx.circle(cx + 16, cy - 10, 6, 0, true)\n  if state == "show" or blobBop > 0 then\n    gfx.circle(cx, cy + 16, 10, 0, true)    -- singing mouth\n    gfx.circle(cx, cy + 18, 4, 8, true)\n  elseif state == "miss" then\n    gfx.line(cx - 10, cy + 18, cx + 10, cy + 14, 0)\n  else\n    gfx.line(cx - 12, cy + 12, cx - 4, cy + 20, 0)\n    gfx.line(cx - 4, cy + 20, cx + 4, cy + 20, 0)\n    gfx.line(cx + 4, cy + 20, cx + 12, cy + 12, 0)\n  end\n  -- music notes while singing\n  if state == "show" then\n    local nx = cx + 60 + math.floor(math.sin(t * 3) * 6)\n    local ny = cy - 36 - math.floor((stateT % TIERS[tier].step) * 24)\n    gfx.circle(nx, ny, 4, 7, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, 7)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- jam toggle button (top-left): note = free play, tiny pads = back to game\n  local jam = state == "jam"\n  gfx.rect(8, 8, 52, 36, jam and 9 or 5, true)\n  gfx.rect(8, 8, 52, 36, 7, false)\n  if jam then\n    gfx.rect(16, 18, 10, 16, 8, true)\n    gfx.rect(30, 18, 10, 16, 10, true)\n    gfx.rect(44, 18, 10, 16, 12, true)\n  else\n    gfx.circle(26, 32, 4, 7, true)\n    gfx.line(30, 32, 30, 16, 7)\n    gfx.line(30, 16, 38, 20, 7)\n  end\n\n  -- tier star badges (one per unlocked tier) under the blob; a fresh one flashes\n  for i = 1, tier do\n    local x = 20 + (i - 1) * 22\n    local r = 6\n    if newStarT > 0 and i == tier and math.floor(t * 8) % 2 == 0 then\n      r = 10\n    end\n    gfx.circle(x, 240, r, 10, true)\n    gfx.circle(x, 240, 2, 9, true)\n  end\n\n  -- best streak, gold-star convention (bottom of the blob column)\n  gfx.circle(32, 292, 8, 10, true)\n  gfx.circle(32, 292, 4, 9, true)\n  gfx.text(tostring(best), 48, 283, 10, 3)\n\n  drawBlob(gfx)\n\n  -- progress dots: one per note, filled as the kid plays it back \u2014\n  -- a vertical strip between the blob and the pads\n  if not jam then\n    local n = #pattern\n    local y0 = 168 - (n - 1) * 14\n    for i = 1, n do\n      local y = y0 + (i - 1) * 28\n      if i <= inputIdx then\n        gfx.circle(152, y, 10, 10, true)\n        gfx.circle(152, y, 10, 9, false)\n      else\n        gfx.circle(152, y, 10, 6, false)\n      end\n    end\n  end\n\n  -- the pads (3 tall columns, or a 2x2 grid from tier 3)\n  for i = 1, TIERS[tier].pads do\n    local x, y, w, h = padRect(i)\n    local grow = flash[i] > 0 and 6 or 0\n    gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, PAD_COLORS[i], true)\n    if flash[i] > 0 then\n      gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, 7, false)\n      gfx.rect(x - grow + 2, y - grow + 2, w + grow * 2 - 4, h + grow * 2 - 4, 7, false)\n    else\n      gfx.rect(x, y, w, h, 0, false)\n    end\n    -- a little dimple so pads read as buttons\n    gfx.circle(x + math.floor(w / 2), y + math.floor(h / 2), 16, 7, false)\n  end\n\n  -- floating notes while jamming\n  for i = 1, #jamNotes do\n    local n = jamNotes[i]\n    local nx, ny = math.floor(n.x), math.floor(n.y)\n    gfx.circle(nx, ny, 4, n.c, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, n.c)\n  end\n\n  if state == "party" then\n    for i = 1, 5 do\n      local x = 200 + (i - 1) * 60\n      local y = 160 + math.floor(math.sin(t * 6 + i) * 16)\n      gfx.circle(x, y, 12, 10, true)\n      gfx.circle(x, y, 6, 7, true)\n    end\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Beat Bop: Simon for little ears. Big pads, each with its own note.\n-- The DJ blob sings a short pattern (pads flash); the kid taps it back.\n-- Success grows the pattern by one (up to 8, then a big party). Each party\n-- unlocks the next TIER, faster songs, fresh voices, and from tier 3 a\n-- fourth pad (the pads become a 2x2 grid, still toddler-sized). Tier shows\n-- as star badges under the blob. A miss just giggles and REPLAYS the same\n-- pattern, never punitive. B (or the corner note button) toggles free-play\n-- JAM mode: no pattern, every pad always live, the blob dances along.\n-- Canvas 480x320 (landscape, native hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- Layout: the DJ blob keeps a left column (jam button above, star badges and\n-- best below, progress dots as a vertical strip beside it); the pads fill the\n-- right side, 3 tall columns, or a 2x2 grid from tier 3.\n\nlocal PAD_FREQ = { 262, 330, 392, 523 }   -- C E G C\nlocal PAD_COLORS = { 8, 10, 12, 11 }\nlocal PAD_X = 168\nlocal MAX_LEN = 8\nlocal MAX_TIER = 4\n\n-- tier voices per docs/05 tone waves: tri, then sine (faster), then square\n-- (fourth pad joins), then a mix, higher tiers sound fresh\nlocal TIERS = {\n  { pads = 3, step = 0.55, toneMs = 260, waves = { "tri", "tri", "tri" } },\n  { pads = 3, step = 0.44, toneMs = 210, waves = { "sine", "sine", "sine" } },\n  { pads = 4, step = 0.44, toneMs = 210, waves = { "square", "square", "square", "square" } },\n  { pads = 4, step = 0.36, toneMs = 180, waves = { "tri", "sine", "square", "tri" } },\n}\n\nlocal pattern = {}\nlocal state = "show"       -- "show" | "input" | "miss" | "good" | "party" | "jam"\nlocal stateT = 0\nlocal showIdx = 0\nlocal inputIdx = 0\nlocal flash = { 0, 0, 0, 0 }\nlocal best = 0\nlocal tier = 1             -- highest tier reached; runs always play at it\nlocal newStarT = 0         -- freshly-earned star flashes during the party\nlocal idleT = 0            -- replay help if the kid stalls\nlocal blobBop = 0\nlocal wobble = 0\nlocal jamNotes = {}        -- floating notes while jamming: {x, y, c, life}\nlocal t = 0\nlocal touchWasDown = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms, vol, wave)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms, vol = vol, wave = wave }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    local q = toneq[i]\n    if q.at <= now then\n      vupp.tone(q.freq, q.ms, q.vol or 0.8, q.wave or "tri")\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function padRect(i)\n  if TIERS[tier].pads == 3 then\n    return PAD_X + (i - 1) * 104, 24, 98, 288\n  end\n  local col = (i - 1) % 2\n  local row = i > 2 and 1 or 0\n  return PAD_X + col * 156, 24 + row * 148, 150, 140\nend\n\nlocal function playPad(i)\n  local tt = TIERS[tier]\n  local w = tt.waves[i] or "tri"\n  vupp.tone(PAD_FREQ[i], tt.toneMs, w == "square" and 0.55 or 0.8, w)\n  flash[i] = 0.35\n  blobBop = 0.3\nend\n\nlocal function newPattern(len)\n  pattern = {}\n  for i = 1, len do\n    pattern[i] = vupp.rand(TIERS[tier].pads)\n  end\n  state = "show"\n  stateT = -0.6   -- little breath before the pattern starts\n  showIdx = 0\n  inputIdx = 0\nend\n\nlocal function patternComplete()\n  local len = #pattern\n  if len > best then\n    best = len\n    vupp.store.set("best_streak", best)  -- hard-exit safe\n    vupp.emit("beat.streak", { length = len })\n  end\n  if len >= MAX_LEN then\n    state = "party"\n    stateT = 2.8\n    -- fanfare: square-lead arpeggio, sine octave shimmer, closing chord\n    scheduleTone(0.00, 523, 110, 0.7, "square")\n    scheduleTone(0.00, 1046, 110, 0.35, "sine")\n    scheduleTone(0.13, 659, 110, 0.7, "square")\n    scheduleTone(0.13, 1318, 110, 0.35, "sine")\n    scheduleTone(0.26, 784, 110, 0.7, "square")\n    scheduleTone(0.39, 1047, 110, 0.7, "square")\n    scheduleTone(0.52, 1319, 240, 0.8, "tri")\n    scheduleTone(0.52, 784, 240, 0.5, "sine")\n    scheduleTone(0.52, 523, 240, 0.4, "sine")\n    if tier < MAX_TIER then\n      -- first full song at this tier: the next challenge unlocks\n      tier = tier + 1\n      vupp.store.set("tier", tier)  -- hard-exit safe\n      vupp.emit("beat.tier", { tier = tier })\n      newStarT = 2.8\n    end\n  else\n    state = "good"\n    stateT = 0.9\n    scheduleTone(0.05, 660, 90)\n    scheduleTone(0.18, 880, 140)\n  end\nend\n\nlocal function padPressed(i)\n  if i > TIERS[tier].pads then\n    return\n  end\n  if state == "jam" then\n    -- free play: every pad always live, a note floats up inside the pad\n    playPad(i)\n    local x, y, w, h = padRect(i)\n    jamNotes[#jamNotes + 1] = {\n      x = x + vupp.rand(w) - 1, y = y + math.floor(h / 2), c = PAD_COLORS[i], life = 1,\n    }\n    return\n  end\n  if state ~= "input" then\n    return\n  end\n  playPad(i)\n  idleT = 0\n  if i == pattern[inputIdx + 1] then\n    inputIdx = inputIdx + 1\n    if inputIdx >= #pattern then\n      patternComplete()\n    end\n  else\n    -- a giggle, then the SAME pattern replays\n    state = "miss"\n    stateT = 1.0\n    wobble = 0.6\n    scheduleTone(0.30, 300, 70)\n    scheduleTone(0.40, 220, 70)\n    scheduleTone(0.50, 260, 110)\n  end\nend\n\nlocal function toggleJam()\n  if state == "jam" then\n    vupp.tone(523, 80, 0.6)\n    newPattern(1)\n  else\n    state = "jam"\n    jamNotes = {}\n    vupp.tone(784, 80, 0.6, "sine")\n  end\nend\n\nfunction vupp.init()\n  best = vupp.store.get("best_streak", 0)\n  tier = math.floor(vupp.store.get("tier", 1))\n  if tier < 1 then\n    tier = 1\n  elseif tier > MAX_TIER then\n    tier = MAX_TIER\n  end\n  newPattern(1)\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, 4 do\n    flash[i] = math.max(0, flash[i] - dt)\n  end\n  blobBop = math.max(0, blobBop - dt)\n  wobble = math.max(0, wobble - dt)\n  newStarT = math.max(0, newStarT - dt)\n\n  local i = 1\n  while i <= #jamNotes do\n    local n = jamNotes[i]\n    n.y = n.y - 60 * dt\n    n.life = n.life - dt\n    if n.life <= 0 then\n      table.remove(jamNotes, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if state == "show" then\n    stateT = stateT + dt\n    local step = math.floor(stateT / TIERS[tier].step) + 1\n    if step > showIdx and step <= #pattern then\n      showIdx = step\n      playPad(pattern[step])\n    elseif step > #pattern then\n      state = "input"\n      inputIdx = 0\n      idleT = 0\n    end\n  elseif state == "input" then\n    idleT = idleT + dt\n    if idleT > 6 then\n      -- gentle help: sing it again\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "miss" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      state = "show"\n      stateT = -0.3\n      showIdx = 0\n      inputIdx = 0\n    end\n  elseif state == "good" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(#pattern + 1)\n    end\n  elseif state == "party" then\n    stateT = stateT - dt\n    if stateT <= 0 then\n      newPattern(1)   -- fresh run at the (maybe just-unlocked) tier\n    end\n  end\n\n  -- B toggles jam mode (engine v7: B belongs to gameplay)\n  if vupp.btnp("b") then\n    toggleJam()\n  end\n\n  -- d-pad chords onto the pads too\n  if TIERS[tier].pads == 3 then\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("down") then\n      padPressed(2)\n    elseif vupp.btnp("right") then\n      padPressed(3)\n    end\n  else\n    -- 2x2 grid: left/up = top row, down/right = bottom row\n    if vupp.btnp("left") then\n      padPressed(1)\n    elseif vupp.btnp("up") then\n      padPressed(2)\n    elseif vupp.btnp("down") then\n      padPressed(3)\n    elseif vupp.btnp("right") then\n      padPressed(4)\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown then\n      if touch.x < 68 and touch.y < 56 then\n        toggleJam()\n      elseif touch.x >= PAD_X - 12 then\n        local pi\n        if TIERS[tier].pads == 3 then\n          pi = math.max(1, math.min(3, math.floor((touch.x - PAD_X) / 104) + 1))\n        else\n          local col = touch.x < PAD_X + 156 and 0 or 1\n          local row = touch.y < 172 and 0 or 1\n          pi = row * 2 + col + 1\n        end\n        padPressed(pi)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawBlob(gfx)\n  local cx, cy = 76, 156\n  local bop = math.floor(blobBop * 40)\n  local ox = 0\n  if wobble > 0 then\n    ox = math.floor(math.sin(wobble * 30) * 8)\n  end\n  if state == "jam" then\n    -- the DJ dances along in free play\n    bop = bop + math.floor(math.abs(math.sin(t * 5)) * 12)\n    ox = ox + math.floor(math.sin(t * 2.5) * 12)\n  end\n  cx = cx + ox\n  cy = cy - bop\n  gfx.circle(cx, cy, 48, 11, true)\n  gfx.circle(cx, cy, 48, 3, false)\n  -- headphones\n  gfx.circle(cx - 44, cy - 4, 12, 5, true)\n  gfx.circle(cx + 44, cy - 4, 12, 5, true)\n  gfx.circle(cx, cy - 24, 50, 5, false)\n  -- face\n  gfx.circle(cx - 16, cy - 10, 6, 0, true)\n  gfx.circle(cx + 16, cy - 10, 6, 0, true)\n  if state == "show" or blobBop > 0 then\n    gfx.circle(cx, cy + 16, 10, 0, true)    -- singing mouth\n    gfx.circle(cx, cy + 18, 4, 8, true)\n  elseif state == "miss" then\n    gfx.line(cx - 10, cy + 18, cx + 10, cy + 14, 0)\n  else\n    gfx.line(cx - 12, cy + 12, cx - 4, cy + 20, 0)\n    gfx.line(cx - 4, cy + 20, cx + 4, cy + 20, 0)\n    gfx.line(cx + 4, cy + 20, cx + 12, cy + 12, 0)\n  end\n  -- music notes while singing\n  if state == "show" then\n    local nx = cx + 60 + math.floor(math.sin(t * 3) * 6)\n    local ny = cy - 36 - math.floor((stateT % TIERS[tier].step) * 24)\n    gfx.circle(nx, ny, 4, 7, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, 7)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- jam toggle button (top-left): note = free play, tiny pads = back to game\n  local jam = state == "jam"\n  gfx.rect(8, 8, 52, 36, jam and 9 or 5, true)\n  gfx.rect(8, 8, 52, 36, 7, false)\n  if jam then\n    gfx.rect(16, 18, 10, 16, 8, true)\n    gfx.rect(30, 18, 10, 16, 10, true)\n    gfx.rect(44, 18, 10, 16, 12, true)\n  else\n    gfx.circle(26, 32, 4, 7, true)\n    gfx.line(30, 32, 30, 16, 7)\n    gfx.line(30, 16, 38, 20, 7)\n  end\n\n  -- tier star badges (one per unlocked tier) under the blob; a fresh one flashes\n  for i = 1, tier do\n    local x = 20 + (i - 1) * 22\n    local r = 6\n    if newStarT > 0 and i == tier and math.floor(t * 8) % 2 == 0 then\n      r = 10\n    end\n    gfx.circle(x, 240, r, 10, true)\n    gfx.circle(x, 240, 2, 9, true)\n  end\n\n  -- best streak, gold-star convention (bottom of the blob column)\n  gfx.circle(32, 292, 8, 10, true)\n  gfx.circle(32, 292, 4, 9, true)\n  gfx.text(tostring(best), 48, 283, 10, 3)\n\n  drawBlob(gfx)\n\n  -- progress dots: one per note, filled as the kid plays it back,\n  -- a vertical strip between the blob and the pads\n  if not jam then\n    local n = #pattern\n    local y0 = 168 - (n - 1) * 14\n    for i = 1, n do\n      local y = y0 + (i - 1) * 28\n      if i <= inputIdx then\n        gfx.circle(152, y, 10, 10, true)\n        gfx.circle(152, y, 10, 9, false)\n      else\n        gfx.circle(152, y, 10, 6, false)\n      end\n    end\n  end\n\n  -- the pads (3 tall columns, or a 2x2 grid from tier 3)\n  for i = 1, TIERS[tier].pads do\n    local x, y, w, h = padRect(i)\n    local grow = flash[i] > 0 and 6 or 0\n    gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, PAD_COLORS[i], true)\n    if flash[i] > 0 then\n      gfx.rect(x - grow, y - grow, w + grow * 2, h + grow * 2, 7, false)\n      gfx.rect(x - grow + 2, y - grow + 2, w + grow * 2 - 4, h + grow * 2 - 4, 7, false)\n    else\n      gfx.rect(x, y, w, h, 0, false)\n    end\n    -- a little dimple so pads read as buttons\n    gfx.circle(x + math.floor(w / 2), y + math.floor(h / 2), 16, 7, false)\n  end\n\n  -- floating notes while jamming\n  for i = 1, #jamNotes do\n    local n = jamNotes[i]\n    local nx, ny = math.floor(n.x), math.floor(n.y)\n    gfx.circle(nx, ny, 4, n.c, true)\n    gfx.line(nx + 4, ny, nx + 4, ny - 12, n.c)\n  end\n\n  if state == "party" then\n    for i = 1, 5 do\n      local x = 200 + (i - 1) * 60\n      local y = 160 + math.floor(math.sin(t * 6 + i) * 16)\n      gfx.circle(x, y, 12, 10, true)\n      gfx.circle(x, y, 6, 7, true)\n    end\n  end\nend\n'
+      }
+    },
+    {
+      slug: "blockworld",
+      title: "BlockWorld",
+      category: "game",
+      summary: "uses the touchscreen",
+      palette: 255,
+      lines: 759,
+      files: {
+        "app.json": '{"slug":"blockworld","title":"BlockWorld","version":"1.0.0","author":"Vupp","category":"game","fps":30,"capabilities":["touch"],"hires":true,"min_engine":17,"palette":["#141826","#7ab44a","#8c6842","#808086","#d6c48c","#7a5634","#4a8c40","#3a78c4","#eef2f6","#c4543c","#e2be46","#9660b4","#e8783c","#3c3c42","#fafafa","#5aaabe","#609c3a","#745434","#96969d","#e8d6a4","#604226","#387430","#ced8e2","#963a2a","#ffe278","#be84dc","#ffb450","#60a4e2","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#0e111c","#5a8536","#674c30","#5e5e63","#9e9167","#5a3f26","#36672f","#2a5891","#b0b3b6","#913e2c","#a78c33","#6f4785","#ab582c","#2c2c30","#b9b9b9","#427d8c","#47732a","#553e26","#6f6f74","#ab9e79","#47301c","#295523","#989fa7","#6f2a1f","#bca758","#8c61a2","#bc853b","#4779a7","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#0a0c13","#3f5d26","#483622","#424245","#6f6548","#3f2c1b","#264821","#1e3e65","#7b7d7f","#652b1f","#756224","#4e315d","#783e1f","#1f1f22","#828282","#2e5862","#31511e","#3c2b1b","#4e4e51","#786f55","#312213","#1d3c18","#6b7075","#4e1e15","#84753e","#624472","#845d29","#315575","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#000000","#0c101c","#f4f7fa","#000000","#ffd640","#78c4e8","#3c5a96","#ff8c6e","#969ea8","#222836","#ffffff","#563e26","#c4965a","#464e5a","#805c38","#1a202c","#ced6de","#343c4a","#606876","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826","#141826"],"parent":{"version":1,"documents":{},"commands":{},"events":{}}}',
+        "main.lua": `-- BlockWorld, walk it, chop it, build it.
+--
+-- The world is a native voxel grid (engine v17): gfx.vworld allocates it,
+-- gfx.vterrain extrudes the landscape in one call, gfx.vset places and breaks,
+-- gfx.vray finds the block under the crosshair and gfx.vdraw rasterises the
+-- whole thing in a single Lua->C call. Nothing about the world lives in Lua
+-- except the numbers on this page, on device, a Lua chunk mesher costs
+-- 200ms+ per chunk and worldgen alone blew the frame watchdog.
+
+local WX, WY, WZ = 96, 96, 40
+local CHUNK = 16
+
+-- Block table. \`pat\` is a 4x4 bitmap (row-major, bit 0 = top-left) drawn in
+-- \`accent\` instead of the face colour, the SAME on all six faces, so a block
+-- is recognisable from any angle without needing real textures. The renderer
+-- steps it in world cell space, so it never swims with the camera.
+local BLOCKS = {
+  { id = 1,  name = "GRASS",  top = 1,  side = 2,  bottom = 2,
+    accent = 16, pat = 0xa925 },
+  { id = 2,  name = "DIRT",   top = 2,  side = 2,  bottom = 2,
+    accent = 17, pat = 0x2814 },
+  { id = 3,  name = "STONE",  top = 3,  side = 3,  bottom = 3,
+    accent = 18, pat = 0x0e07 },
+  { id = 4,  name = "SAND",   top = 4,  side = 4,  bottom = 4,
+    accent = 19, pat = 0xa041 },
+  { id = 5,  name = "WOOD",   top = 5,  side = 5,  bottom = 5,
+    accent = 20, pat = 0x6666 },
+  { id = 6,  name = "LEAVES", top = 6,  side = 6,  bottom = 6,
+    accent = 21, pat = 0x7edb },
+  { id = 8,  name = "SNOW",   top = 8,  side = 8,  bottom = 8,
+    accent = 22, pat = 0x8020 },
+  { id = 9,  name = "BRICK",  top = 9,  side = 9,  bottom = 9,
+    accent = 23, pat = 0xaf5f },
+  { id = 10, name = "GOLD",   top = 10, side = 10, bottom = 10,
+    accent = 24, pat = 0x4a52 },
+  { id = 11, name = "MAGIC",  top = 11, side = 11, bottom = 11,
+    accent = 25, pat = 0x9669 },
+  { id = 12, name = "FLAME",  top = 12, side = 12, bottom = 12,
+    accent = 26, pat = 0x5eba },
+  { id = 7,  name = "WATER",  top = 7,  side = 7,  bottom = 7,
+    accent = 27, pat = 0xc030 },
+}
+
+local SKY, SKY_LOW = 196, 197
+local PAPER, GOLD, SHADOW = 193, 195, 200
+local HAFT, BLADE, EDGE = 205, 207, 209      -- axe: handle, head, dark edge
+local PANEL, TILE = 206, 208                 -- tool menu
+
+-- ---------------------------------------------------------------- worldgen
+-- Spread over frames: the engine caps a callback at ~3M Lua instructions and
+-- 250ms of wall clock, and on device this loop is the expensive part (C does
+-- the actual filling in one gfx.vterrain call at the end).
+local gen = { y = 0, rows = {}, done = false, trees = 0 }
+local GEN_ROWS = 8
+
+local function hash2(x, y)
+  local n = x * 374761393 + y * 668265263
+  n = (n ~ (n >> 13)) * 1274126177
+  return ((n ~ (n >> 16)) & 0xffff) / 65535.0
+end
+
+local function vnoise(x, y)
+  local ix, iy = x // 1, y // 1
+  local fx, fy = x - ix, y - iy
+  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy)
+  local a = hash2(ix, iy)     * (1 - fx) + hash2(ix + 1, iy)     * fx
+  local b = hash2(ix, iy + 1) * (1 - fx) + hash2(ix + 1, iy + 1) * fx
+  return a * (1 - fy) + b * fy
+end
+
+local function height_at(x, y)
+  -- Broad, smooth hills on purpose. A noisy heightmap turns every column
+  -- into its own 1x1 step, greedy meshing has nothing to merge, and the
+  -- renderer ends up drawing thousands of narrow slivers (8 px/span on the
+  -- first device run). Wide plateaus merge into big quads AND look better.
+  local h = 9 + vnoise(x * 0.026, y * 0.026) * 15
+            + vnoise(x * 0.075, y * 0.075) * 3
+  h = h // 1
+  if h < 2 then h = 2 elseif h > WZ - 6 then h = WZ - 6 end
+  return h
+end
+
+local function gen_step(gfx)
+  if gen.y < WY then
+    local y1 = gen.y + GEN_ROWS - 1
+    if y1 > WY - 1 then y1 = WY - 1 end
+    for y = gen.y, y1 do
+      local row = {}
+      for x = 0, WX - 1 do row[x + 1] = string.char(height_at(x, y)) end
+      gen.rows[y + 1] = table.concat(row)
+    end
+    gen.y = y1 + 1
+    return false
+  end
+  if not gen.extruded then
+    -- one C call builds the whole landscape
+    gfx.vterrain(table.concat(gen.rows), 1, 2, 3, 3)
+    gen.rows = nil
+    gen.extruded = true
+    return false
+  end
+  -- trees, then beaches: a few hundred gfx.vfill calls, spread over frames
+  local made = 0
+  while gen.trees < WY and made < 6 do
+    local y = gen.trees
+    for x = 2, WX - 3 do
+      -- Fewer, chunkier trees. A forest of thin trunks is the renderer's
+      -- worst case: every trunk is a narrow sliver, and narrow spans mean
+      -- scattered partial-cache-line writes to the PSRAM canvas. Wide
+      -- canopies merge into big quads instead.
+      if hash2(x * 7 + 1, y * 11 + 3) > 0.9955 then
+        local h = height_at(x, y)
+        if h > 5 and h < WZ - 12 then
+          gfx.vfill(x - 1, y - 1, h + 1, x, y, h + 4, 5)
+          gfx.vfill(x - 3, y - 3, h + 5, x + 3, y + 3, h + 7, 6)
+          gfx.vfill(x - 2, y - 2, h + 8, x + 2, y + 2, h + 8, 6)
+          made = made + 1
+        end
+      end
+    end
+    gen.trees = gen.trees + 1
+  end
+  if gen.trees < WY then return false end
+  return true
+end
+
+-- --------------------------------------------------------------- lifecycle
+local started = false
+
+-- ---------------------------------------------------------------- the player
+-- A body, not a camera: gravity, a jump, and blocks you cannot walk through.
+-- Feet at (px,py,pz); the eye rides 1.62 above. The world is a byte grid in C,
+-- so every collision probe is one gfx.vget, cheap enough to do per axis.
+local EYE, GRAV, JUMP, WALK = 1.62, 22.0, 7.6, 5.2
+local ply = { x = WX * 0.5, y = WY * 0.5, z = 24, vz = 0, yaw = 0.7, pitch = -0.18,
+              onground = false }
+
+-- Camera, the Meadow convention: HOLD select drops out of first person, TAP
+-- cycles. BlockWorld defaults to first person and offers four third-person
+-- corners rather than Meadow's two, so you can walk round what you built.
+local CAM_FP = 0
+local CAM_RIGS = {
+  { dist = 5.5, rise = 2.6, pitch = -0.30, off = 0.0 },
+  { dist = 5.5, rise = 2.6, pitch = -0.30, off = math.pi * 0.5 },
+  { dist = 5.5, rise = 2.6, pitch = -0.30, off = math.pi },
+  { dist = 7.5, rise = 5.2, pitch = -0.62, off = math.pi * 1.5 },
+}
+local cam_mode = CAM_FP        -- 0 = first person, 1..4 = the rigs above
+local cam_yaw = 0.7            -- third person: the camera's OWN heading
+local sel_t = -1               -- SELECT press time; tap vs hold on release
+local SEL_HOLD = 0.35
+local rig = { x = 0, y = 0, z = 0, yaw = 0, pitch = 0, ready = false }
+
+local TOOL_AXE = 0
+local tool = TOOL_AXE          -- 0 = axe, else index into BLOCKS
+local menu, menu_i = false, 0   -- menu_i: 0 = axe, 1..#BLOCKS
+local swing, hold_b, b_was, b_done = 0, 0, false, false
+local BREAK_HOLD = 0.4          -- seconds of B before a build tool breaks
+
+local mcam
+local t = 0
+local placed, broken = 0, 0
+local msg, msg_t = nil, 0
+local touch_prev = nil
+local gfx_ref                   -- the gfx table is permanent (docs/07 sanctioned)
+
+function vupp.init()
+  mcam = {
+    x = 0, y = 0, z = 0, yaw = ply.yaw, pitch = ply.pitch,
+    focal = 300, cx = 240, cy = 160,
+    tier = 64, lx = 0.42, ly = 0.30, lz = 0.86,
+    fog1 = 26, fog2 = 42,   -- also sets the chunk far-cull (1.5x fog2)
+  }
+  tool = vupp.store.get("tool", 0)
+  placed = vupp.store.get("placed", 0)
+  broken = vupp.store.get("broken", 0)
+end
+
+local function start(gfx)
+  gfx.vworld{ w = WX, d = WY, h = WZ, chunk = CHUNK }
+  for _, b in ipairs(BLOCKS) do
+    gfx.vblock(b.id, b.top, b.side, b.bottom)
+    gfx.vpattern(b.id, b.accent, b.pat)
+  end
+  gfx.vlod(44)   -- texture almost to the fog; the far field flat-fills
+  -- A saved world skips worldgen entirely. The grid run-length-encodes itself
+  -- in C: 368,640 cells is far past the 4KB document cap AND past what Lua
+  -- could walk on device, so gfx.vsave/vload own the whole job.
+  if gfx.vload("world") then
+    gen.done, gen.loaded = true, true
+    ply.x = vupp.store.get("px", WX * 0.5)
+    ply.y = vupp.store.get("py", WY * 0.5)
+    ply.z = vupp.store.get("pz", 24)
+    ply.yaw = vupp.store.get("yaw", 0.7)
+    ply.vz, ply.onground = 0, false
+  end
+  started = true
+end
+
+-- Saving is cheap (a few KB of runs) but it is still an SD write, so it happens
+-- at the two moments a child expects: when they leave, and quietly every so
+-- often after they have changed something.
+local dirty_since_save, save_t = false, 0
+
+local function save_world()
+  if not gfx_ref or not gen.done then return end
+  gfx_ref.vsave("world")
+  vupp.store.set("px", ply.x)
+  vupp.store.set("py", ply.y)
+  vupp.store.set("pz", ply.z)
+  vupp.store.set("yaw", ply.yaw)
+  dirty_since_save, save_t = false, 0
+end
+
+function vupp.on_exit()
+  vupp.store.set("tool", tool)
+  vupp.store.set("placed", placed)
+  vupp.store.set("broken", broken)
+  save_world()
+end
+
+local function solid(x, y, z)
+  if not gfx_ref then return false end
+  return gfx_ref.vget(x // 1, y // 1, z // 1) ~= 0
+end
+
+-- The body is a 0.6-wide column two blocks tall; probe both at once.
+local function blocked(x, y, z)
+  return solid(x, y, z) or solid(x, y, z + 1.0)
+end
+
+local function look_dir()
+  local cp = math.cos(ply.pitch)
+  return math.cos(ply.yaw) * cp, math.sin(ply.yaw) * cp, math.sin(ply.pitch)
+end
+
+local function flash(s)
+  msg, msg_t = s, 1.4
+end
+
+-- ------------------------------------------------------------------ tools
+local function tool_name()
+  return tool == TOOL_AXE and "AXE" or BLOCKS[tool].name
+end
+
+local function aim()
+  if not gfx_ref then return nil end
+  local dx, dy, dz = look_dir()
+  return gfx_ref.vray(ply.x, ply.y, ply.z + EYE, dx, dy, dz, 6.0)
+end
+
+-- Looking level, the crosshair reaches nothing: the eye rides 1.62 above the
+-- feet, so a level ray stays above the floor for its whole length. Rather than
+-- make the player aim down to build, fall back to the column two steps ahead
+-- and use its surface, B always does the obvious thing.
+local function ahead_surface()
+  if not gfx_ref then return nil end
+  local fx, fy = math.cos(ply.yaw), math.sin(ply.yaw)
+  local cx = (ply.x + fx * 2.0) // 1
+  local cy = (ply.y + fy * 2.0) // 1
+  local top = (ply.z + 2.0) // 1
+  local floor = (ply.z // 1) - 4
+  for z = top, floor, -1 do
+    if z >= 1 and gfx_ref.vget(cx, cy, z) == 0
+       and gfx_ref.vget(cx, cy, z - 1) ~= 0 then
+      return cx, cy, z          -- the empty cell resting on the surface
+    end
+  end
+  return nil
+end
+
+-- world -> screen, mirroring the engine's mcam transform so the outline sits
+-- exactly on the block the renderer drew (focal 300, centre 240/160).
+local function project(wx, wy, wz)
+  local dx, dy, dz = wx - rig.x, wy - rig.y, wz - rig.z
+  local cf, sf = math.cos(rig.yaw), math.sin(rig.yaw)
+  local fwd = dx * cf + dy * sf
+  local rgt = -dx * sf + dy * cf
+  local cp, sp = math.cos(rig.pitch), math.sin(rig.pitch)
+  local dep = fwd * cp + dz * sp
+  if dep < 0.25 then return nil end
+  local up = dz * cp - fwd * sp
+  return 240 + rgt * 300 / dep, 160 - up * 300 / dep
+end
+
+-- The cell B would act on: the block the axe chops, or the empty cell a block
+-- would land in. Showing it is the difference between building and guessing.
+local function target()
+  local hx, hy, hz, bx, by, bz = aim()
+  if not hx then
+    local cx, cy, cz = ahead_surface()
+    if not cx then return nil end
+    if tool == TOOL_AXE then return cx, cy, cz - 1, false end
+    return cx, cy, cz, true
+  end
+  if tool == TOOL_AXE then return hx, hy, hz, false end
+  return bx, by, bz, true
+end
+
+local EDGES = {
+  {1,2},{2,3},{3,4},{4,1},          -- bottom
+  {5,6},{6,7},{7,8},{8,5},          -- top
+  {1,5},{2,6},{3,7},{4,8},          -- risers
+}
+
+-- corner rings: 1..4 the bottom face, 5..8 the top, both counter-clockwise
+local RING = { {0,0}, {1,0}, {1,1}, {0,1} }
+
+local function draw_outline(gfx)
+  local cx, cy, cz, is_place = target()
+  if not cx then return end
+  local px, py = {}, {}
+  for k = 1, 4 do
+    local o = RING[k]
+    px[k], py[k] = project(cx + o[1], cy + o[2], cz)
+    px[k + 4], py[k + 4] = project(cx + o[1], cy + o[2], cz + 1)
+    if not px[k] or not px[k + 4] then
+      return -- a corner is behind the near plane; skip rather than draw junk
+    end
+  end
+  local col = is_place and GOLD or PAPER
+  for e = 1, 12 do
+    local a, b = EDGES[e][1], EDGES[e][2]
+    gfx.line(px[a], py[a], px[b], py[b], col)
+  end
+end
+
+local function do_break()
+  local hx, hy, hz = aim()
+  if not hx then
+    -- nothing under the crosshair: chop the ground in front instead
+    local cx, cy, cz = ahead_surface()
+    if not cx then return false end
+    hx, hy, hz = cx, cy, cz - 1
+  end
+  gfx_ref.vset(hx, hy, hz, 0)
+  broken = broken + 1
+  dirty_since_save = true
+  vupp.tone(150, 70, 0.35, "noise")
+  return true
+end
+
+local function do_place()
+  if tool == TOOL_AXE then return false end
+  local hx, _, _, bx, by, bz = aim()
+  if not hx then
+    bx, by, bz = ahead_surface()   -- drop it in front of you
+    if not bx then return false end
+  end
+  -- never brick yourself in: the two cells the body occupies are off limits
+  local fx, fy, fz = ply.x // 1, ply.y // 1, ply.z // 1
+  if bx == fx and by == fy and (bz == fz or bz == fz + 1) then
+    flash("NOT THERE")
+    return false
+  end
+  gfx_ref.vset(bx, by, bz, BLOCKS[tool].id)
+  placed = placed + 1
+  dirty_since_save = true
+  vupp.tone(640, 55, 0.3, "tri")
+  return true
+end
+
+-- ------------------------------------------------------------------ update
+local function update_menu()
+  local n = #BLOCKS
+  if vupp.btnp("left") then menu_i = (menu_i - 1) % (n + 1) end
+  if vupp.btnp("right") then menu_i = (menu_i + 1) % (n + 1) end
+  if vupp.btnp("up") then menu_i = (menu_i - 5) % (n + 1) end
+  if vupp.btnp("down") then menu_i = (menu_i + 5) % (n + 1) end
+  if vupp.btnp("b") or vupp.btnp("a") or vupp.btnp("select") then
+    tool = menu_i
+    menu = false
+    b_was, b_done = true, true   -- the B that closed the menu is not a tap
+    flash(tool_name())
+    vupp.tone(700, 45, 0.3, "sine")
+  end
+end
+
+local function move_body(dt)
+  local sp = WALK * dt
+  local dx, dy = 0, 0
+
+  if cam_mode == CAM_FP then
+    -- First person: up/down walk, left/right turn the head. The camera IS the
+    -- head, so screen-relative and body-relative are the same thing.
+    local fx, fy = math.cos(ply.yaw), math.sin(ply.yaw)
+    if vupp.btn("up") then dx, dy = fx, fy end
+    if vupp.btn("down") then dx, dy = -fx, -fy end
+    if vupp.btn("left") then ply.yaw = ply.yaw - 1.9 * dt end
+    if vupp.btn("right") then ply.yaw = ply.yaw + 1.9 * dt end
+  else
+    -- Third person: the d-pad points where YOU are looking, not where the
+    -- character is. Up is away from the camera, left is left of the screen.
+    -- The character turns to face wherever it ends up going.
+    local fx, fy = math.cos(rig.yaw), math.sin(rig.yaw)
+    local rx, ry = -fy, fx
+    if vupp.btn("up") then dx, dy = dx + fx, dy + fy end
+    if vupp.btn("down") then dx, dy = dx - fx, dy - fy end
+    if vupp.btn("right") then dx, dy = dx + rx, dy + ry end
+    if vupp.btn("left") then dx, dy = dx - rx, dy - ry end
+    local m = math.sqrt(dx * dx + dy * dy)
+    if m > 0.001 then
+      dx, dy = dx / m, dy / m
+      -- turn toward the heading rather than snapping, so a diagonal reads
+      local want = math.atan(dy, dx)
+      local d = want - ply.yaw
+      while d > math.pi do d = d - math.pi * 2 end
+      while d < -math.pi do d = d + math.pi * 2 end
+      local k = dt * 12
+      if k > 1 then k = 1 end
+      ply.yaw = ply.yaw + d * k
+    end
+  end
+
+  if dx ~= 0 or dy ~= 0 then
+    -- One axis at a time so you slide along a wall instead of sticking to it.
+    -- There is deliberately NO auto step-up: a block at knee height stops you,
+    -- and getting on top of it means jumping. That is the whole physics feel.
+    local nx = ply.x + dx * sp
+    if not blocked(nx, ply.y, ply.z) then ply.x = nx end
+    local ny = ply.y + dy * sp
+    if not blocked(ply.x, ny, ply.z) then ply.y = ny end
+  end
+
+  -- gravity and the jump
+  if vupp.btnp("a") and ply.onground then
+    ply.vz = JUMP
+    ply.onground = false
+    vupp.tone(430, 60, 0.25, "sine")
+  end
+  ply.vz = ply.vz - GRAV * dt
+  if ply.vz < -30 then ply.vz = -30 end
+  local nz = ply.z + ply.vz * dt
+  if ply.vz > 0 then
+    if solid(ply.x, ply.y, nz + 2.0) then     -- head into a ceiling
+      ply.vz = 0
+    else
+      ply.z = nz
+    end
+    ply.onground = false
+  else
+    if solid(ply.x, ply.y, nz) then
+      ply.z = (nz // 1) + 1.0                  -- land on top of the block
+      ply.vz = 0
+      ply.onground = true
+    else
+      ply.z = nz
+      ply.onground = false
+    end
+  end
+
+  if ply.x < 1 then ply.x = 1 elseif ply.x > WX - 2 then ply.x = WX - 2 end
+  if ply.y < 1 then ply.y = 1 elseif ply.y > WY - 2 then ply.y = WY - 2 end
+  if ply.z < 1 then ply.z, ply.vz, ply.onground = 1, 0, true end
+end
+
+-- Where the eye actually is this frame. First person sits on the head; the
+-- third-person rigs orbit the body and glide, so turning does not snap.
+local function update_rig(dt)
+  if cam_mode == CAM_FP then
+    rig.x, rig.y, rig.z = ply.x, ply.y, ply.z + EYE
+    rig.yaw, rig.pitch = ply.yaw, ply.pitch
+    rig.ready = true
+    return
+  end
+  local cm = CAM_RIGS[cam_mode]
+  local yaw = cam_yaw + cm.off
+  local tx = ply.x - math.cos(yaw) * cm.dist
+  local ty = ply.y - math.sin(yaw) * cm.dist
+  local tz = ply.z + cm.rise
+  -- Pull the camera in when the world is between it and the player, or you
+  -- end up looking at the inside of a tree trunk. One ray from the head out
+  -- to where the camera wants to be; stop at the last empty cell.
+  if gfx_ref then
+    local ex, ey, ez = ply.x, ply.y, ply.z + EYE
+    local dx, dy, dz = tx - ex, ty - ey, tz - ez
+    local len = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if len > 0.1 then
+      local hx, _, _, bx, by, bz = gfx_ref.vray(ex, ey, ez, dx, dy, dz, len)
+      if hx then
+        -- back off ALONG the ray rather than snapping to the blocking cell's
+        -- centre, which jammed the camera inside the character
+        local hd = math.sqrt((bx + 0.5 - ex) ^ 2 + (by + 0.5 - ey) ^ 2
+                             + (bz + 0.5 - ez) ^ 2) - 0.35
+        if hd < 1.9 then hd = 1.9 end
+        if hd < len then
+          local k = hd / len
+          tx, ty, tz = ex + dx * k, ey + dy * k, ez + dz * k
+        end
+      end
+    end
+  end
+  if not rig.ready then
+    rig.x, rig.y, rig.z, rig.yaw, rig.pitch = tx, ty, tz, yaw, cm.pitch
+    rig.ready = true
+    return
+  end
+  local k = dt * 6.0
+  if k > 1 then k = 1 end
+  rig.x = rig.x + (tx - rig.x) * k
+  rig.y = rig.y + (ty - rig.y) * k
+  rig.z = rig.z + (tz - rig.z) * k
+  local d = yaw - rig.yaw
+  while d > math.pi do d = d - math.pi * 2 end
+  while d < -math.pi do d = d + math.pi * 2 end
+  rig.yaw = rig.yaw + d * k
+  rig.pitch = rig.pitch + (cm.pitch - rig.pitch) * k
+end
+
+function vupp.update(dt)
+  t = t + dt
+  if msg_t > 0 then msg_t = msg_t - dt end
+  if swing > 0 then swing = swing - dt end
+  if not gen.done or not gfx_ref then return end
+
+  -- touch drags the view; the d-pad is busy walking
+  local tc = vupp.touch()
+  if tc and tc.held then
+    if touch_prev then
+      local dyaw = (tc.x - touch_prev.x) * 0.006
+      if cam_mode == CAM_FP then
+        ply.yaw = ply.yaw - dyaw
+      else
+        cam_yaw = cam_yaw - dyaw   -- orbit the camera, not the character
+      end
+      ply.pitch = ply.pitch - (tc.y - touch_prev.y) * 0.006
+      if ply.pitch > 1.35 then ply.pitch = 1.35 end
+      if ply.pitch < -1.35 then ply.pitch = -1.35 end
+    end
+    touch_prev = { x = tc.x, y = tc.y }
+  else
+    touch_prev = nil
+  end
+
+  if dirty_since_save then
+    save_t = save_t + dt
+    if save_t > 20 then
+      save_world()
+      flash("SAVED")
+    end
+  end
+
+  if menu then
+    update_menu()
+    return
+  end
+
+  -- SELECT: hold to leave/enter first person, tap to cycle the third-person
+  -- corners, or, in first person, to open the tool menu.
+  if vupp.btnp("select") then sel_t = t end
+  if sel_t >= 0 then
+    if vupp.btn("select") then
+      if t - sel_t >= SEL_HOLD then
+        if cam_mode == CAM_FP then
+          cam_mode, cam_yaw = 1, ply.yaw   -- start behind where you were facing
+        else
+          ply.yaw = rig.yaw                -- keep looking where the camera was
+          cam_mode = CAM_FP
+        end
+        rig.ready = false
+        flash(cam_mode == CAM_FP and "FIRST PERSON" or "THIRD PERSON")
+        vupp.tone(cam_mode == CAM_FP and 700 or 460, 60, 0.3, "sine")
+        sel_t = -1
+      end
+    else
+      if t - sel_t < SEL_HOLD then
+        if cam_mode == CAM_FP then
+          menu, menu_i = true, tool
+          vupp.tone(560, 45, 0.3, "sine")
+        else
+          cam_mode = cam_mode % #CAM_RIGS + 1
+          vupp.tone(500 + cam_mode * 30, 40, 0.28, "sine")
+        end
+      end
+      sel_t = -1
+      if menu then return end
+    end
+  end
+
+  move_body(dt)
+
+  -- B is the one "use" button. The axe swings on press. A build tool places
+  -- on a tap and breaks when you HOLD it, so one button covers both verbs.
+  local b = vupp.btn("b")
+  if b and not b_was then
+    hold_b, b_done = 0, false
+    if tool == TOOL_AXE then
+      swing = 0.26
+      do_break()
+      b_done = true
+    end
+  elseif b then
+    hold_b = hold_b + dt
+    if not b_done and tool ~= TOOL_AXE and hold_b >= BREAK_HOLD then
+      swing = 0.26
+      do_break()
+      b_done = true
+    end
+  elseif b_was then
+    if not b_done and tool ~= TOOL_AXE then do_place() end
+    hold_b = 0
+  end
+  b_was = b
+  update_rig(dt)
+end
+
+-- -------------------------------------------------------------------- draw
+local function draw_axe(gfx)
+  -- A first-person axe held bottom-right: a thick haft and a wedge head.
+  -- Swings on a short arc, which is all a hit needs to read.
+  local k = swing > 0 and math.sin((1 - swing / 0.26) * 3.14159) or 0
+  local bx, by = 428 - k * 72, 318 - k * 30
+  local tx, ty = bx - 74 - k * 54, by - 128 - k * 46
+  for i = -7, 7 do
+    gfx.line(bx + i, by, tx + i, ty, (i < -4 or i > 5) and EDGE or HAFT)
+  end
+  gfx.rect(tx - 30, ty - 6, 44, 30, BLADE, true)     -- head
+  gfx.rect(tx - 38, ty + 2, 12, 20, PAPER, true)     -- the bit, catching light
+  gfx.rect(tx - 30, ty + 20, 44, 6, EDGE, true)      -- shadow under the head
+end
+
+local function draw_hand_block(gfx)
+  local b = BLOCKS[tool]
+  local k = swing > 0 and math.sin((1 - swing / 0.26) * 3.14159) or 0
+  local x, y = 372 - k * 40, 246 - k * 30
+  gfx.rect(x, y, 62, 58, b.side + 64, true)
+  gfx.rect(x + 6, y - 12, 62, 20, b.top, true)
+  for i = 0, 15 do
+    if (b.pat >> i) & 1 == 1 then
+      gfx.rect(x + 4 + (i % 4) * 14, y + 6 + (i // 4) * 12, 12, 10, b.accent + 64, true)
+    end
+  end
+end
+
+local function draw_menu(gfx)
+  gfx.rect(40, 44, 400, 210, PANEL, true)
+  gfx.rect(40, 44, 400, 26, 197, true)
+  gfx.text("CHOOSE YOUR TOOL", 240 - 16 * 6, 50, 193, 2)
+  local n = #BLOCKS
+  for i = 0, n do
+    local col, row = i % 5, i // 5
+    local x, y = 62 + col * 74, 84 + row * 54
+    local on = i == menu_i
+    if on then gfx.rect(x - 5, y - 5, 62, 52, 193, true) end
+    gfx.rect(x, y, 52, 42, TILE, true)
+    if i == TOOL_AXE then
+      for j = 0, 2 do
+        gfx.line(x + 10 + j, y + 34, x + 34 + j, y + 12, HAFT)
+      end
+      gfx.rect(x + 28, y + 6, 18, 14, BLADE, true)
+      gfx.rect(x + 24, y + 9, 7, 10, PAPER, true)
+    else
+      local b = BLOCKS[i]
+      gfx.rect(x + 6, y + 6, 40, 30, b.top, true)
+      for k = 0, 15 do
+        if (b.pat >> k) & 1 == 1 then
+          gfx.rect(x + 6 + (k % 4) * 10, y + 6 + (k // 4) * 8, 9, 7, b.accent, true)
+        end
+      end
+    end
+  end
+  local nm = menu_i == TOOL_AXE and "AXE" or BLOCKS[menu_i].name
+  gfx.text(nm, 240 - #nm * 6, 228, 195, 2)
+end
+
+function vupp.draw(gfx)
+  gfx_ref = gfx
+  if not started then start(gfx) end
+
+  if not gen.done then
+    gfx.clear(SKY)
+    gfx.rect(0, 200, 480, 120, SKY_LOW, true)
+    local pct = (gen.y * 60) // WY + (gen.extruded and 20 or 0)
+                + (gen.trees * 20) // WY
+    gfx.text("BUILDING YOUR WORLD", 240 - 19 * 6, 130, PAPER, 3)
+    gfx.rect(120, 170, 240, 14, SHADOW, true)
+    gfx.rect(122, 172, (236 * pct) // 100, 10, GOLD, true)
+    gen.done = gen_step(gfx)
+    if gen.done then
+      -- Stand on the TERRAIN, not on the tallest thing above it. The world
+      -- centre often has a tree, and spawning on its canopy reads as floating
+      -- until you step off and fall.
+      for r = 0, 12 do
+        local sx, sy = WX * 0.5 + r, WY * 0.5
+        local gz = height_at(sx // 1, sy // 1) + 1
+        if gfx.vget(sx // 1, sy // 1, gz) == 0
+           and gfx.vget(sx // 1, sy // 1, gz + 1) == 0 then
+          ply.x, ply.y, ply.z = sx + 0.5, sy + 0.5, gz
+          break
+        end
+      end
+      ply.vz, ply.onground = 0, true
+      ply.pitch = -0.18
+      flash("SELECT = TOOLS")
+    end
+    return
+  end
+
+  gfx.clear(SKY)
+  gfx.rect(0, 0, 480, 150, SKY_LOW, true)
+
+  if not rig.ready then
+    rig.x, rig.y, rig.z = ply.x, ply.y, ply.z + EYE
+    rig.yaw, rig.pitch, rig.ready = ply.yaw, ply.pitch, true
+  end
+  mcam.x, mcam.y, mcam.z = rig.x, rig.y, rig.z
+  mcam.yaw, mcam.pitch = rig.yaw, rig.pitch
+  gfx.mcam(mcam)
+  gfx.vdraw()
+
+  -- Crosshair only in first person. In third person the eye and the screen
+  -- centre are different places, so a centred cross would point at the wrong
+  -- block, the wireframe outline is the honest indicator there.
+  if cam_mode == CAM_FP then
+    local c = aim() ~= nil and GOLD or PAPER
+    gfx.rect(233, 159, 5, 2, c, true)
+    gfx.rect(242, 159, 5, 2, c, true)
+    gfx.rect(239, 153, 2, 5, c, true)
+    gfx.rect(239, 162, 2, 5, c, true)
+  end
+
+  -- In third person you need something to follow. Six boxes submitted through
+  -- gfx.vbox, which the voxel pass orders against the world, a mesh could not
+  -- do this, since that pass keeps no depth buffer for a later one to test.
+  if cam_mode ~= CAM_FP then
+    local fx, fy = math.cos(ply.yaw), math.sin(ply.yaw)
+    local rx, ry = -fy, fx
+    local moving = vupp.btn("up") or vupp.btn("down")
+                   or vupp.btn("left") or vupp.btn("right")
+    local sw = moving and math.sin(t * 11) * 0.20 or 0
+    local bob = moving and math.abs(math.sin(t * 11)) * 0.06 or 0
+    local px, py, pz = ply.x, ply.y, ply.z + bob
+    -- legs swing fore/aft, arms counter-swing: enough to read as walking
+    gfx.vbox(px + rx * 0.16 + fx * sw, py + ry * 0.16 + fy * sw, pz, 0.26, 0.26, 0.72, 3)
+    gfx.vbox(px - rx * 0.16 - fx * sw, py - ry * 0.16 - fy * sw, pz, 0.26, 0.26, 0.72, 3)
+    gfx.vbox(px, py, pz + 0.72, 0.56, 0.34, 0.66, 9)
+    gfx.vbox(px + rx * 0.40 - fx * sw, py + ry * 0.40 - fy * sw, pz + 0.74, 0.20, 0.20, 0.62, 9)
+    gfx.vbox(px - rx * 0.40 + fx * sw, py - ry * 0.40 + fy * sw, pz + 0.74, 0.20, 0.20, 0.62, 9)
+    gfx.vbox(px + fx * 0.04, py + fy * 0.04, pz + 1.38, 0.52, 0.52, 0.50, 4)
+  end
+
+  draw_outline(gfx)
+  if tool == TOOL_AXE then draw_axe(gfx) else draw_hand_block(gfx) end
+
+  -- the hold-to-break meter, only while it is filling
+  if hold_b > 0.05 and tool ~= TOOL_AXE and not b_done then
+    local w = (hold_b / BREAK_HOLD) * 120
+    if w > 120 then w = 120 end
+    gfx.rect(180, 196, 120, 8, SHADOW, true)
+    gfx.rect(181, 197, w, 6, GOLD, true)
+  end
+
+  gfx.rect(0, 0, 480, 24, SHADOW, true)
+  gfx.text(tool_name(), 8, 6, PAPER, 2)
+  gfx.text(string.format("%d BUILT  %d BROKEN", placed, broken), 250, 6, 199, 2)
+  if msg_t > 0 then gfx.text(msg, 240 - #msg * 6, 96, GOLD, 2) end
+  if menu then draw_menu(gfx) end
+end
+`
       }
     },
     {
@@ -2355,7 +3421,7 @@ end
     "commands": {},
     "events": {
       "calm.sleep": {
-        "description": "Your kid breathed the jellyfish all the way down to sleep \u2014 ten slow breaths",
+        "description": "Your kid breathed the jellyfish all the way down to sleep, ten slow breaths",
         "schema": {
           "type": "object",
           "properties": {
@@ -2371,7 +3437,7 @@ end
         }
       },
       "calm.session": {
-        "description": "A Drift wind-down ended \u2014 how long and how many slow breaths",
+        "description": "A Drift wind-down ended, how long and how many slow breaths",
         "schema": {
           "type": "object",
           "properties": {
@@ -2411,11 +3477,11 @@ end
         "main.lua": `-- luacheck: globals vupp
 -- Drift: a sleepy jellyfish that floats on your breath. It rises for four
 -- slow seconds (breathe in with it) and sinks for six (blow it along: hold A
--- or hold a finger anywhere while it sinks \u2014 bubbles stream and the jelly
+-- or hold a finger anywhere while it sinks, bubbles stream and the jelly
 -- glows a little warmer). There is no wrong way to play: the jelly keeps its
 -- own gentle rhythm whether you join in or just watch, and nothing is ever
 -- scored or failed. After ten slow breaths it settles onto the sea floor
--- between the anemones and falls asleep \u2014 a soft ending, not a fanfare.
+-- between the anemones and falls asleep, a soft ending, not a fanfare.
 -- Touch anywhere (or A) while it sleeps to float up and drift again.
 -- Long two-note sine swells pace each breath (exhale pitched lower and
 -- longer, the pattern that settles a wound-up nervous system). Canvas
@@ -2462,7 +3528,7 @@ local function pumpTones()
 end
 
 -- each phase is one long two-note swell; the engine's soft envelopes do the
--- breathing for us (exhale sits lower \u2014 the settling direction)
+-- breathing for us (exhale sits lower, the settling direction)
 local function inhaleTone()
   vupp.tone(294, 3800, 0.15, "sine")
   vupp.tone(440, 3800, 0.05, "sine")
@@ -2470,7 +3536,7 @@ end
 
 local function exhaleTone()
   -- tone() tops out at 5000 ms, so the six-second sink is two chained
-  -- swells stepping down a note \u2014 sinking further as the breath empties
+  -- swells stepping down a note, sinking further as the breath empties
   vupp.tone(196, 3000, 0.14, "sine")
   vupp.tone(294, 3000, 0.05, "sine")
   scheduleTone(2.9, 165, 2800, 0.12)
@@ -2718,7 +3784,7 @@ function vupp.draw(gfx)
     local bx = math.floor(b.x + math.sin(t * 2.5 + b.ph) * 4)
     gfx.circle(bx, math.floor(b.y), 4, 12, false)
   end
-  -- one tiny light per breath \u2014 progress you can feel, never a score
+  -- one tiny light per breath, progress you can feel, never a score
   for i = 1, ARC do
     local x = 150 + (i - 1) * 20
     local d = done[i]
@@ -2743,8 +3809,8 @@ end
       palette: 16,
       lines: 449,
       files: {
-        "app.json": '{\n  "slug": "fish-count",\n  "title": "Fish Count",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "rounds_done": {\n              "type": "number",\n              "description": "Counting rounds your kid has finished"\n            },\n            "milestones": {\n              "type": "number",\n              "description": "Pearl strings completed (one per 5 rounds \u2014 each opens the treasure chest)"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much counting practice your kid has done"\n      }\n    },\n    "commands": {},\n    "events": {\n      "math.round": {\n        "description": "Your kid counted out the right number of fish",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "target": {\n              "type": "number",\n              "description": "The number they counted to"\n            },\n            "rounds_done": {\n              "type": "number",\n              "description": "Total rounds finished"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#10121f",\n    "#16305a",\n    "#6a3a64",\n    "#1e7a5a",\n    "#9a6a48",\n    "#5d6b78",\n    "#b8c7d1",\n    "#f4fbff",\n    "#f0604d",\n    "#f0973f",\n    "#f7d961",\n    "#59c98a",\n    "#4a9fd9",\n    "#8b7fae",\n    "#f490b8",\n    "#f5cf9e"\n  ]\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Fish Count: a big numeral (with counting dots) asks for N fish; tap N of\n-- the fish drifting by. Each tapped fish blows a happy bubble; tapping extra\n-- fish just giggles \u2014 no penalty, ever. Rounds ramp 1..9, then mix \u2014 and as\n-- lifetime rounds grow, two-digit targets (up to 15) unlock. Every 5 rounds\n-- fills the pearl string and the treasure chest throws a bigger party; the\n-- scene gently evolves with milestones (water tint, seaweed, new fish\n-- colors). D-pad works too: arrows hop a ring between fish, A counts the\n-- ringed fish. Native 480x320 landscape canvas (hires, engine v14): the\n-- numeral panel + pearls live in a left column, counting dots run along the\n-- top of the water, and the fish get the whole wide tank. Custom ocean\n-- palette (see app.json).\n\nlocal WATER_LEFT = 132  -- water (and taps) start right of the HUD column\nlocal DOTS_BOTTOM = 36  -- counting-dot strip along the top of the water\n\n-- seven-segment numerals (a,b,c,d,e,f,g) so numbers are BIG and chunky;\n-- 0 is the ones digit of 10.\nlocal SEG = {\n  [0] = { true, true, true, true, true, true, false },\n  [1] = { false, true, true, false, false, false, false },\n  [2] = { true, true, false, true, true, false, true },\n  [3] = { true, true, true, true, false, false, true },\n  [4] = { false, true, true, false, false, true, true },\n  [5] = { true, false, true, true, false, true, true },\n  [6] = { true, false, true, true, true, true, true },\n  [7] = { true, true, true, false, false, false, false },\n  [8] = { true, true, true, true, true, true, true },\n  [9] = { true, true, true, true, false, true, true },\n}\n\nlocal fish = {}           -- {x, y, dir, spd, size, color, counted, wob, ph}\nlocal bubbles = {}        -- {x, y, r, vy, life}\nlocal target = 1\nlocal progress = 0\nlocal roundsDone = 0\nlocal milestones = 0      -- every 5 rounds fills the pearl string\nlocal celebT = 0\nlocal celebKind = "round" -- "round" | "milestone"\nlocal t = 0\nlocal touchWasDown = false\nlocal sel = nil           -- d-pad selected fish index\nlocal dpadActive = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function addBubble(x, y, r)\n  bubbles[#bubbles + 1] = { x = x, y = y, r = r, vy = -40 - vupp.rand(40), life = 2 }\nend\n\n-- the school gains colors as milestones accrue\nlocal function fishColors()\n  local cols = { 8, 9, 10, 11, 14, 13, 15 }\n  if milestones >= 1 then cols[#cols + 1] = 6 end  -- a silver fish joins\n  if milestones >= 3 then cols[#cols + 1] = 2 end  -- ...then a plum one\n  return cols\nend\n\nlocal function spawnFish()\n  fish = {}\n  sel = nil\n  local count = math.max(9, target)  -- always enough fish for the target\n  local gap = 224 / math.max(8, count - 1)\n  local cols = fishColors()\n  for i = 1, count do\n    fish[i] = {\n      x = WATER_LEFT + vupp.rand(340),\n      y = DOTS_BOTTOM + 8 + math.floor((i - 1) * gap) + vupp.rand(8),\n      dir = (i % 2 == 0) and 1 or -1,\n      spd = 24 + vupp.rand(28),\n      size = (count > 9) and (10 + vupp.rand(6)) or (14 + vupp.rand(8)),\n      color = cols[(i % #cols) + 1],\n      counted = false,\n      wob = 0,\n      ph = vupp.rand(628) / 100,\n    }\n  end\nend\n\n-- bigger numbers unlock with lifetime practice: 9 \u2192 12 \u2192 15\nlocal function maxTarget()\n  if roundsDone >= 25 then return 15 end\n  if roundsDone >= 15 then return 12 end\n  return 9\nend\n\nlocal function newRound()\n  if roundsDone < 9 then\n    target = roundsDone + 1   -- gentle ramp 1,2,3..9 \u2014 beginners start tiny\n  else\n    target = vupp.rand(maxTarget())\n  end\n  progress = 0\n  spawnFish()\nend\n\nfunction vupp.init()\n  roundsDone = vupp.store.get("rounds_done", 0)\n  -- derive for kids who played before milestones existed\n  milestones = vupp.store.get("milestones", math.floor(roundsDone / 5))\n  newRound()\nend\n\nlocal function fishTapped(f)\n  if not f.counted and progress < target then\n    f.counted = true\n    progress = progress + 1\n    addBubble(f.x + f.dir * (f.size + 4), f.y - f.size, 4 + vupp.rand(4))\n    vupp.tone(440 + progress * 70, 80, 0.7)\n    if progress == target then\n      roundsDone = roundsDone + 1\n      vupp.store.set("rounds_done", roundsDone)  -- hard-exit safe\n      vupp.emit("math.round", { target = target, rounds_done = roundsDone })\n      if roundsDone % 5 == 0 then\n        -- fifth pearl: the treasure chest pops open \u2014 a bigger party\n        milestones = milestones + 1\n        vupp.store.set("milestones", milestones)\n        celebKind = "milestone"\n        celebT = 3.5\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 160)\n        scheduleTone(1.05, 784, 90)\n        scheduleTone(1.20, 988, 90)\n        scheduleTone(1.35, 1319, 260)\n        for _ = 1, 24 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      else\n        celebKind = "round"\n        celebT = 2.0\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 200)\n        for _ = 1, 14 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      end\n    end\n  else\n    -- extra fish just giggle \u2014 never a penalty\n    f.wob = 0.5\n    scheduleTone(0.00, 300, 60)\n    scheduleTone(0.08, 420, 60)\n    scheduleTone(0.16, 350, 80)\n  end\nend\n\nlocal function pickCenterFish()\n  local bi, bd\n  for i = 1, #fish do\n    local dx = fish[i].x - 304\n    local dy = fish[i].y - 160\n    local d = dx * dx + dy * dy\n    if not bd or d < bd then bi, bd = i, d end\n  end\n  return bi\nend\n\n-- hop the selection ring to the nearest fish in the pressed direction\nlocal function moveSel(dx, dy)\n  dpadActive = true\n  if not sel or not fish[sel] then\n    sel = pickCenterFish()\n    return\n  end\n  local f = fish[sel]\n  local bi, bs\n  for i = 1, #fish do\n    if i ~= sel then\n      local rx = fish[i].x - f.x\n      local ry = fish[i].y - f.y\n      local fwd = rx * dx + ry * dy\n      if fwd > 0 then\n        local side = math.abs(rx * dy) + math.abs(ry * dx)\n        local score = fwd + side * 2\n        if not bs or score < bs then bi, bs = i, score end\n      end\n    end\n  end\n  if bi then\n    sel = bi\n    vupp.tone(660, 30, 0.3)\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, #fish do\n    local f = fish[i]\n    f.x = f.x + f.dir * f.spd * dt\n    if f.x > 510 then\n      f.x = WATER_LEFT - 30\n    elseif f.x < WATER_LEFT - 30 then\n      f.x = 510\n    end\n    f.wob = math.max(0, f.wob - dt)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y + b.vy * dt\n    b.life = b.life - dt\n    if b.life <= 0 or b.y < DOTS_BOTTOM then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if celebT > 0 then\n    celebT = celebT - dt\n    if celebT <= 0 then\n      celebT = 0\n      newRound()\n    end\n  end\n\n  -- d-pad fallback: arrows hop the ring, A counts the ringed fish\n  if vupp.btnp("left") then\n    moveSel(-1, 0)\n  elseif vupp.btnp("right") then\n    moveSel(1, 0)\n  elseif vupp.btnp("up") then\n    moveSel(0, -1)\n  elseif vupp.btnp("down") then\n    moveSel(0, 1)\n  end\n  if vupp.btnp("a") and celebT == 0 then\n    dpadActive = true\n    if not sel or not fish[sel] then\n      sel = pickCenterFish()\n    end\n    if sel and fish[sel] then\n      fishTapped(fish[sel])\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown and celebT == 0 and touch.x >= WATER_LEFT then\n      dpadActive = false  -- finger takes over from the ring\n      -- nearest fish within a fat finger radius\n      local hit, hd = nil, 48 * 48\n      for k = 1, #fish do\n        local f = fish[k]\n        local dx = touch.x - f.x\n        local dy = touch.y - f.y\n        local d = dx * dx + dy * dy\n        if d < hd then\n          hit, hd = f, d\n        end\n      end\n      if hit then\n        fishTapped(hit)\n      else\n        addBubble(touch.x, touch.y, 2 + vupp.rand(4))  -- any touch blubs\n        vupp.tone(240, 40, 0.3)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawNumeral(gfx, n, ox, oy, L, T)\n  local s = SEG[n]\n  local c = 10\n  if s[1] then gfx.rect(ox + T, oy, L, T, c, true) end\n  if s[2] then gfx.rect(ox + T + L, oy + T, T, L, c, true) end\n  if s[3] then gfx.rect(ox + T + L, oy + 2 * T + L, T, L, c, true) end\n  if s[4] then gfx.rect(ox + T, oy + 2 * T + 2 * L, L, T, c, true) end\n  if s[5] then gfx.rect(ox, oy + 2 * T + L, T, L, c, true) end\n  if s[6] then gfx.rect(ox, oy + T, T, L, c, true) end\n  if s[7] then gfx.rect(ox + T, oy + T + L, L, T, c, true) end\n  -- bridge vertical joints so bare columns (like "1") read as one bar\n  if s[2] and s[3] then gfx.rect(ox + T + L, oy + T + L, T, T, c, true) end\n  if s[5] and s[6] then gfx.rect(ox, oy + T + L, T, T, c, true) end\nend\n\nlocal function fishScreenY(f)\n  return math.floor(f.y + math.sin(t * 2 + f.ph) * 4)\nend\n\nlocal function drawFish(gfx, f)\n  local x = math.floor(f.x)\n  local y = fishScreenY(f)\n  if f.wob > 0 then\n    x = x + math.floor(math.sin(f.wob * 30) * 6)\n  end\n  local s = f.size\n  -- tail\n  gfx.rect(x - f.dir * (s + 6) - 4, y - 6, 8, 12, f.color, true)\n  gfx.rect(x - f.dir * (s + 10) - 4, y - 10, 8, 20, f.color, true)\n  -- body\n  gfx.circle(x, y, s, f.color, true)\n  -- fin + eye + mouth\n  gfx.circle(x, y + 4, 4, 7, true)\n  local ex = x + f.dir * math.floor(s * 0.5)\n  gfx.circle(ex, y - 4, 4, 7, true)\n  gfx.circle(ex + f.dir * 2, y - 4, 2, 0, true)\n  if f.counted then\n    gfx.circle(x, y - s - 10, 6, 10, false)  -- counted: a golden ring above\n  end\nend\n\nfunction vupp.draw(gfx)\n  -- water tint slowly cycles as milestones accrue\n  local water = ({ 12, 3, 1 })[(milestones % 3) + 1]\n  gfx.clear(water)\n\n  -- sea floor\n  gfx.rect(0, 296, 480, 24, 15, true)\n  gfx.circle(176, 300, 10, 11, true)\n  gfx.circle(300, 304, 8, 11, true)\n\n  -- seaweed sways in once the first pearl string is full\n  local weedCol = (water == 3) and 1 or 3\n  for w = 1, math.min(3, milestones) do\n    local wx = ({ 184, 372, 276 })[w]\n    for k = 0, 5 do\n      local sx = wx + math.floor(math.sin(t * 1.5 + k * 0.7 + w) * 6)\n      gfx.circle(sx, 292 - k * 16, 6, weedCol, true)\n    end\n  end\n\n  -- treasure chest on the floor; pops open at every fifth pearl\n  local open = celebKind == "milestone" and celebT > 0\n  gfx.rect(412, 272, 52, 24, 4, true)\n  gfx.rect(434, 272, 8, 24, 10, true)\n  if open then\n    gfx.rect(412, 248, 52, 10, 2, true)\n    gfx.circle(438, 266, 10, 10, false)\n    for k = 1, 3 do\n      local py = 256 - math.floor((3.5 - celebT) * 36) - k * 12\n      if py > DOTS_BOTTOM then\n        gfx.circle(410 + k * 14, py, 6, 7, true)\n      end\n    end\n  else\n    gfx.rect(412, 260, 52, 12, 2, true)\n  end\n\n  for i = 1, #fish do\n    drawFish(gfx, fish[i])\n  end\n\n  -- HUD column: numeral panel over the fish (they slide in behind it)\n  gfx.rect(0, 0, WATER_LEFT - 4, 320, water, true)\n  gfx.rect(8, 12, 112, 124, 1, true)\n  gfx.rect(8, 12, 112, 124, 13, false)\n  if target < 10 then\n    drawNumeral(gfx, target, 34, 20, 40, 10)\n  else\n    -- two smaller digits side by side\n    drawNumeral(gfx, math.floor(target / 10), 16, 34, 22, 8)\n    drawNumeral(gfx, target % 10, 66, 34, 22, 8)\n  end\n\n  -- counting dots run along the top of the water\n  if target <= 9 then\n    for i = 1, target do\n      local dx = 148 + (i - 1) * 36\n      if i <= progress then\n        gfx.circle(dx, 18, 12, 10, true)\n        gfx.circle(dx, 18, 12, 9, false)\n      else\n        gfx.circle(dx, 18, 12, 7, false)\n      end\n    end\n  else\n    for i = 1, target do\n      local dx = 142 + (i - 1) * 22\n      if i <= progress then\n        gfx.circle(dx, 18, 8, 10, true)\n        gfx.circle(dx, 18, 8, 9, false)\n      else\n        gfx.circle(dx, 18, 8, 7, false)\n      end\n    end\n  end\n\n  -- pearl string: one pearl per round, five opens the chest\n  local shown = roundsDone % 5\n  if celebKind == "milestone" and celebT > 0 then shown = 5 end\n  gfx.line(12, 164, 116, 164, 13)\n  for i = 1, 5 do\n    local px = 20 + (i - 1) * 24\n    if i <= shown then\n      local flash = celebKind == "milestone" and celebT > 0 and math.floor(t * 8) % 2 == 0\n      gfx.circle(px, 164, 8, flash and 10 or 7, true)\n      gfx.circle(px, 164, 8, 6, false)\n    else\n      gfx.circle(px, 164, 6, 13, false)\n    end\n  end\n\n  -- d-pad selection ring\n  if dpadActive and sel and fish[sel] and celebT == 0 then\n    local f = fish[sel]\n    local fy = fishScreenY(f)\n    local r = f.size + 8 + math.floor(math.abs(math.sin(t * 5)) * 6)\n    gfx.circle(math.floor(f.x), fy, r, 7, false)\n    gfx.circle(math.floor(f.x), fy, r + 2, 10, false)\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), b.r, 7, false)\n  end\n\n  if celebT > 0 then\n    -- happy wiggling banner of stars over the water (two rows on milestones)\n    local rows = celebKind == "milestone" and 2 or 1\n    for j = 1, rows do\n      for i = 1, 5 do\n        local x = 192 + (i - 1) * 56\n        local y = 124 + (j - 1) * 44 + math.floor(math.sin(t * 6 + i + j) * 16)\n        gfx.circle(x, y, 12, 10, true)\n        gfx.circle(x, y, 6, 9, true)\n      end\n    end\n  end\nend\n'
+        "app.json": '{\n  "slug": "fish-count",\n  "title": "Fish Count",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "learning",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "rounds_done": {\n              "type": "number",\n              "description": "Counting rounds your kid has finished"\n            },\n            "milestones": {\n              "type": "number",\n              "description": "Pearl strings completed (one per 5 rounds, each opens the treasure chest)"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much counting practice your kid has done"\n      }\n    },\n    "commands": {},\n    "events": {\n      "math.round": {\n        "description": "Your kid counted out the right number of fish",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "target": {\n              "type": "number",\n              "description": "The number they counted to"\n            },\n            "rounds_done": {\n              "type": "number",\n              "description": "Total rounds finished"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#10121f",\n    "#16305a",\n    "#6a3a64",\n    "#1e7a5a",\n    "#9a6a48",\n    "#5d6b78",\n    "#b8c7d1",\n    "#f4fbff",\n    "#f0604d",\n    "#f0973f",\n    "#f7d961",\n    "#59c98a",\n    "#4a9fd9",\n    "#8b7fae",\n    "#f490b8",\n    "#f5cf9e"\n  ]\n}\n',
+        "main.lua": '-- luacheck: globals vupp\n-- Fish Count: a big numeral (with counting dots) asks for N fish; tap N of\n-- the fish drifting by. Each tapped fish blows a happy bubble; tapping extra\n-- fish just giggles, no penalty, ever. Rounds ramp 1..9, then mix, and as\n-- lifetime rounds grow, two-digit targets (up to 15) unlock. Every 5 rounds\n-- fills the pearl string and the treasure chest throws a bigger party; the\n-- scene gently evolves with milestones (water tint, seaweed, new fish\n-- colors). D-pad works too: arrows hop a ring between fish, A counts the\n-- ringed fish. Native 480x320 landscape canvas (hires, engine v14): the\n-- numeral panel + pearls live in a left column, counting dots run along the\n-- top of the water, and the fish get the whole wide tank. Custom ocean\n-- palette (see app.json).\n\nlocal WATER_LEFT = 132  -- water (and taps) start right of the HUD column\nlocal DOTS_BOTTOM = 36  -- counting-dot strip along the top of the water\n\n-- seven-segment numerals (a,b,c,d,e,f,g) so numbers are BIG and chunky;\n-- 0 is the ones digit of 10.\nlocal SEG = {\n  [0] = { true, true, true, true, true, true, false },\n  [1] = { false, true, true, false, false, false, false },\n  [2] = { true, true, false, true, true, false, true },\n  [3] = { true, true, true, true, false, false, true },\n  [4] = { false, true, true, false, false, true, true },\n  [5] = { true, false, true, true, false, true, true },\n  [6] = { true, false, true, true, true, true, true },\n  [7] = { true, true, true, false, false, false, false },\n  [8] = { true, true, true, true, true, true, true },\n  [9] = { true, true, true, true, false, true, true },\n}\n\nlocal fish = {}           -- {x, y, dir, spd, size, color, counted, wob, ph}\nlocal bubbles = {}        -- {x, y, r, vy, life}\nlocal target = 1\nlocal progress = 0\nlocal roundsDone = 0\nlocal milestones = 0      -- every 5 rounds fills the pearl string\nlocal celebT = 0\nlocal celebKind = "round" -- "round" | "milestone"\nlocal t = 0\nlocal touchWasDown = false\nlocal sel = nil           -- d-pad selected fish index\nlocal dpadActive = false\nlocal toneq = {}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function addBubble(x, y, r)\n  bubbles[#bubbles + 1] = { x = x, y = y, r = r, vy = -40 - vupp.rand(40), life = 2 }\nend\n\n-- the school gains colors as milestones accrue\nlocal function fishColors()\n  local cols = { 8, 9, 10, 11, 14, 13, 15 }\n  if milestones >= 1 then cols[#cols + 1] = 6 end  -- a silver fish joins\n  if milestones >= 3 then cols[#cols + 1] = 2 end  -- ...then a plum one\n  return cols\nend\n\nlocal function spawnFish()\n  fish = {}\n  sel = nil\n  local count = math.max(9, target)  -- always enough fish for the target\n  local gap = 224 / math.max(8, count - 1)\n  local cols = fishColors()\n  for i = 1, count do\n    fish[i] = {\n      x = WATER_LEFT + vupp.rand(340),\n      y = DOTS_BOTTOM + 8 + math.floor((i - 1) * gap) + vupp.rand(8),\n      dir = (i % 2 == 0) and 1 or -1,\n      spd = 24 + vupp.rand(28),\n      size = (count > 9) and (10 + vupp.rand(6)) or (14 + vupp.rand(8)),\n      color = cols[(i % #cols) + 1],\n      counted = false,\n      wob = 0,\n      ph = vupp.rand(628) / 100,\n    }\n  end\nend\n\n-- bigger numbers unlock with lifetime practice: 9 \u2192 12 \u2192 15\nlocal function maxTarget()\n  if roundsDone >= 25 then return 15 end\n  if roundsDone >= 15 then return 12 end\n  return 9\nend\n\nlocal function newRound()\n  if roundsDone < 9 then\n    target = roundsDone + 1   -- gentle ramp 1,2,3..9, beginners start tiny\n  else\n    target = vupp.rand(maxTarget())\n  end\n  progress = 0\n  spawnFish()\nend\n\nfunction vupp.init()\n  roundsDone = vupp.store.get("rounds_done", 0)\n  -- derive for kids who played before milestones existed\n  milestones = vupp.store.get("milestones", math.floor(roundsDone / 5))\n  newRound()\nend\n\nlocal function fishTapped(f)\n  if not f.counted and progress < target then\n    f.counted = true\n    progress = progress + 1\n    addBubble(f.x + f.dir * (f.size + 4), f.y - f.size, 4 + vupp.rand(4))\n    vupp.tone(440 + progress * 70, 80, 0.7)\n    if progress == target then\n      roundsDone = roundsDone + 1\n      vupp.store.set("rounds_done", roundsDone)  -- hard-exit safe\n      vupp.emit("math.round", { target = target, rounds_done = roundsDone })\n      if roundsDone % 5 == 0 then\n        -- fifth pearl: the treasure chest pops open, a bigger party\n        milestones = milestones + 1\n        vupp.store.set("milestones", milestones)\n        celebKind = "milestone"\n        celebT = 3.5\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 160)\n        scheduleTone(1.05, 784, 90)\n        scheduleTone(1.20, 988, 90)\n        scheduleTone(1.35, 1319, 260)\n        for _ = 1, 24 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      else\n        celebKind = "round"\n        celebT = 2.0\n        scheduleTone(0.30, 523, 100)\n        scheduleTone(0.45, 659, 100)\n        scheduleTone(0.60, 784, 100)\n        scheduleTone(0.75, 1047, 200)\n        for _ = 1, 14 do\n          local bx = WATER_LEFT + vupp.rand(340)\n          addBubble(bx, DOTS_BOTTOM + 20 + vupp.rand(220), 2 + vupp.rand(6))\n        end\n      end\n    end\n  else\n    -- extra fish just giggle, never a penalty\n    f.wob = 0.5\n    scheduleTone(0.00, 300, 60)\n    scheduleTone(0.08, 420, 60)\n    scheduleTone(0.16, 350, 80)\n  end\nend\n\nlocal function pickCenterFish()\n  local bi, bd\n  for i = 1, #fish do\n    local dx = fish[i].x - 304\n    local dy = fish[i].y - 160\n    local d = dx * dx + dy * dy\n    if not bd or d < bd then bi, bd = i, d end\n  end\n  return bi\nend\n\n-- hop the selection ring to the nearest fish in the pressed direction\nlocal function moveSel(dx, dy)\n  dpadActive = true\n  if not sel or not fish[sel] then\n    sel = pickCenterFish()\n    return\n  end\n  local f = fish[sel]\n  local bi, bs\n  for i = 1, #fish do\n    if i ~= sel then\n      local rx = fish[i].x - f.x\n      local ry = fish[i].y - f.y\n      local fwd = rx * dx + ry * dy\n      if fwd > 0 then\n        local side = math.abs(rx * dy) + math.abs(ry * dx)\n        local score = fwd + side * 2\n        if not bs or score < bs then bi, bs = i, score end\n      end\n    end\n  end\n  if bi then\n    sel = bi\n    vupp.tone(660, 30, 0.3)\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  pumpTones()\n\n  for i = 1, #fish do\n    local f = fish[i]\n    f.x = f.x + f.dir * f.spd * dt\n    if f.x > 510 then\n      f.x = WATER_LEFT - 30\n    elseif f.x < WATER_LEFT - 30 then\n      f.x = 510\n    end\n    f.wob = math.max(0, f.wob - dt)\n  end\n\n  local i = 1\n  while i <= #bubbles do\n    local b = bubbles[i]\n    b.y = b.y + b.vy * dt\n    b.life = b.life - dt\n    if b.life <= 0 or b.y < DOTS_BOTTOM then\n      table.remove(bubbles, i)\n    else\n      i = i + 1\n    end\n  end\n\n  if celebT > 0 then\n    celebT = celebT - dt\n    if celebT <= 0 then\n      celebT = 0\n      newRound()\n    end\n  end\n\n  -- d-pad fallback: arrows hop the ring, A counts the ringed fish\n  if vupp.btnp("left") then\n    moveSel(-1, 0)\n  elseif vupp.btnp("right") then\n    moveSel(1, 0)\n  elseif vupp.btnp("up") then\n    moveSel(0, -1)\n  elseif vupp.btnp("down") then\n    moveSel(0, 1)\n  end\n  if vupp.btnp("a") and celebT == 0 then\n    dpadActive = true\n    if not sel or not fish[sel] then\n      sel = pickCenterFish()\n    end\n    if sel and fish[sel] then\n      fishTapped(fish[sel])\n    end\n  end\n\n  local touch = vupp.touch()\n  if touch then\n    if not touchWasDown and celebT == 0 and touch.x >= WATER_LEFT then\n      dpadActive = false  -- finger takes over from the ring\n      -- nearest fish within a fat finger radius\n      local hit, hd = nil, 48 * 48\n      for k = 1, #fish do\n        local f = fish[k]\n        local dx = touch.x - f.x\n        local dy = touch.y - f.y\n        local d = dx * dx + dy * dy\n        if d < hd then\n          hit, hd = f, d\n        end\n      end\n      if hit then\n        fishTapped(hit)\n      else\n        addBubble(touch.x, touch.y, 2 + vupp.rand(4))  -- any touch blubs\n        vupp.tone(240, 40, 0.3)\n      end\n    end\n    touchWasDown = true\n  else\n    touchWasDown = false\n  end\nend\n\nlocal function drawNumeral(gfx, n, ox, oy, L, T)\n  local s = SEG[n]\n  local c = 10\n  if s[1] then gfx.rect(ox + T, oy, L, T, c, true) end\n  if s[2] then gfx.rect(ox + T + L, oy + T, T, L, c, true) end\n  if s[3] then gfx.rect(ox + T + L, oy + 2 * T + L, T, L, c, true) end\n  if s[4] then gfx.rect(ox + T, oy + 2 * T + 2 * L, L, T, c, true) end\n  if s[5] then gfx.rect(ox, oy + 2 * T + L, T, L, c, true) end\n  if s[6] then gfx.rect(ox, oy + T, T, L, c, true) end\n  if s[7] then gfx.rect(ox + T, oy + T + L, L, T, c, true) end\n  -- bridge vertical joints so bare columns (like "1") read as one bar\n  if s[2] and s[3] then gfx.rect(ox + T + L, oy + T + L, T, T, c, true) end\n  if s[5] and s[6] then gfx.rect(ox, oy + T + L, T, T, c, true) end\nend\n\nlocal function fishScreenY(f)\n  return math.floor(f.y + math.sin(t * 2 + f.ph) * 4)\nend\n\nlocal function drawFish(gfx, f)\n  local x = math.floor(f.x)\n  local y = fishScreenY(f)\n  if f.wob > 0 then\n    x = x + math.floor(math.sin(f.wob * 30) * 6)\n  end\n  local s = f.size\n  -- tail\n  gfx.rect(x - f.dir * (s + 6) - 4, y - 6, 8, 12, f.color, true)\n  gfx.rect(x - f.dir * (s + 10) - 4, y - 10, 8, 20, f.color, true)\n  -- body\n  gfx.circle(x, y, s, f.color, true)\n  -- fin + eye + mouth\n  gfx.circle(x, y + 4, 4, 7, true)\n  local ex = x + f.dir * math.floor(s * 0.5)\n  gfx.circle(ex, y - 4, 4, 7, true)\n  gfx.circle(ex + f.dir * 2, y - 4, 2, 0, true)\n  if f.counted then\n    gfx.circle(x, y - s - 10, 6, 10, false)  -- counted: a golden ring above\n  end\nend\n\nfunction vupp.draw(gfx)\n  -- water tint slowly cycles as milestones accrue\n  local water = ({ 12, 3, 1 })[(milestones % 3) + 1]\n  gfx.clear(water)\n\n  -- sea floor\n  gfx.rect(0, 296, 480, 24, 15, true)\n  gfx.circle(176, 300, 10, 11, true)\n  gfx.circle(300, 304, 8, 11, true)\n\n  -- seaweed sways in once the first pearl string is full\n  local weedCol = (water == 3) and 1 or 3\n  for w = 1, math.min(3, milestones) do\n    local wx = ({ 184, 372, 276 })[w]\n    for k = 0, 5 do\n      local sx = wx + math.floor(math.sin(t * 1.5 + k * 0.7 + w) * 6)\n      gfx.circle(sx, 292 - k * 16, 6, weedCol, true)\n    end\n  end\n\n  -- treasure chest on the floor; pops open at every fifth pearl\n  local open = celebKind == "milestone" and celebT > 0\n  gfx.rect(412, 272, 52, 24, 4, true)\n  gfx.rect(434, 272, 8, 24, 10, true)\n  if open then\n    gfx.rect(412, 248, 52, 10, 2, true)\n    gfx.circle(438, 266, 10, 10, false)\n    for k = 1, 3 do\n      local py = 256 - math.floor((3.5 - celebT) * 36) - k * 12\n      if py > DOTS_BOTTOM then\n        gfx.circle(410 + k * 14, py, 6, 7, true)\n      end\n    end\n  else\n    gfx.rect(412, 260, 52, 12, 2, true)\n  end\n\n  for i = 1, #fish do\n    drawFish(gfx, fish[i])\n  end\n\n  -- HUD column: numeral panel over the fish (they slide in behind it)\n  gfx.rect(0, 0, WATER_LEFT - 4, 320, water, true)\n  gfx.rect(8, 12, 112, 124, 1, true)\n  gfx.rect(8, 12, 112, 124, 13, false)\n  if target < 10 then\n    drawNumeral(gfx, target, 34, 20, 40, 10)\n  else\n    -- two smaller digits side by side\n    drawNumeral(gfx, math.floor(target / 10), 16, 34, 22, 8)\n    drawNumeral(gfx, target % 10, 66, 34, 22, 8)\n  end\n\n  -- counting dots run along the top of the water\n  if target <= 9 then\n    for i = 1, target do\n      local dx = 148 + (i - 1) * 36\n      if i <= progress then\n        gfx.circle(dx, 18, 12, 10, true)\n        gfx.circle(dx, 18, 12, 9, false)\n      else\n        gfx.circle(dx, 18, 12, 7, false)\n      end\n    end\n  else\n    for i = 1, target do\n      local dx = 142 + (i - 1) * 22\n      if i <= progress then\n        gfx.circle(dx, 18, 8, 10, true)\n        gfx.circle(dx, 18, 8, 9, false)\n      else\n        gfx.circle(dx, 18, 8, 7, false)\n      end\n    end\n  end\n\n  -- pearl string: one pearl per round, five opens the chest\n  local shown = roundsDone % 5\n  if celebKind == "milestone" and celebT > 0 then shown = 5 end\n  gfx.line(12, 164, 116, 164, 13)\n  for i = 1, 5 do\n    local px = 20 + (i - 1) * 24\n    if i <= shown then\n      local flash = celebKind == "milestone" and celebT > 0 and math.floor(t * 8) % 2 == 0\n      gfx.circle(px, 164, 8, flash and 10 or 7, true)\n      gfx.circle(px, 164, 8, 6, false)\n    else\n      gfx.circle(px, 164, 6, 13, false)\n    end\n  end\n\n  -- d-pad selection ring\n  if dpadActive and sel and fish[sel] and celebT == 0 then\n    local f = fish[sel]\n    local fy = fishScreenY(f)\n    local r = f.size + 8 + math.floor(math.abs(math.sin(t * 5)) * 6)\n    gfx.circle(math.floor(f.x), fy, r, 7, false)\n    gfx.circle(math.floor(f.x), fy, r + 2, 10, false)\n  end\n\n  for i = 1, #bubbles do\n    local b = bubbles[i]\n    gfx.circle(math.floor(b.x), math.floor(b.y), b.r, 7, false)\n  end\n\n  if celebT > 0 then\n    -- happy wiggling banner of stars over the water (two rows on milestones)\n    local rows = celebKind == "milestone" and 2 or 1\n    for j = 1, rows do\n      for i = 1, 5 do\n        local x = 192 + (i - 1) * 56\n        local y = 124 + (j - 1) * 44 + math.floor(math.sin(t * 6 + i + j) * 16)\n        gfx.circle(x, y, 12, 10, true)\n        gfx.circle(x, y, 6, 9, true)\n      end\n    end\n  end\nend\n'
       }
     },
     {
@@ -2756,7 +3822,7 @@ end
       lines: 613,
       files: {
         "app.json": '{\n  "slug": "maze",\n  "title": "Maze",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "game",\n  "fps": 30,\n  "capabilities": [],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The maze level your kid will play next (after 20 the SUPER MAZE loop begins)"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found tucked away off the maze paths"\n            },\n            "all_done": {\n              "type": "boolean",\n              "description": "True once your kid has finished all 20 mazes at least once"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How far your kid has gotten in the maze, plus bonus stars found"\n      }\n    },\n    "commands": {},\n    "events": {\n      "maze.level_done": {\n        "description": "Your kid guided the critter all the way through a maze",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "level": {\n              "type": "number",\n              "description": "The level that was just finished"\n            }\n          }\n        }\n      },\n      "maze.all_done": {\n        "description": "Your kid finished all 20 mazes - the SUPER MAZE loop is unlocked!",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "stars": {\n              "type": "number",\n              "description": "Bonus star cookies found so far"\n            }\n          }\n        }\n      }\n    }\n  }\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Maze: walk a little round critter through a maze to the cookie.\n-- D-pad only, no timer, no lives; walls just gently bounce.\n-- v1.1: 20 hand-authored mazes, bonus star cookies tucked off the path,\n-- soft step blips + a munch at the cookie, a big "you did all 20!" moment,\n-- and a labeled SUPER MAZE loop afterwards (same mazes, walked backwards,\n-- new wall colors) instead of a silent recycle.\n-- Native 480x320 canvas (engine v14, hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- The hand-authored (mostly tall) level grids are transposed at load so the\n-- mazes run wide \u2014 same walls, same paths, same solvability.\n\n-- Level data: "#" wall, "." floor, "S" start, "G" goal (cookie),\n-- "*" bonus star cookie (off the direct path).\n-- All levels validated solvable; after 20 they loop as SUPER MAZE\n-- (start and cookie swap places, so every maze walks the other way).\nlocal LEVELS = {\n  { -- 1: one bend\n    "#####",\n    "#S..#",\n    "###.#",\n    "#G..#",\n    "#####",\n  },\n  { -- 2: a couple of turns\n    "#######",\n    "#S....#",\n    "#####.#",\n    "#..#..#",\n    "#..#.##",\n    "#G...##",\n    "#######",\n  },\n  { -- 3: serpentine\n    "#######",\n    "#S#...#",\n    "#.#.#.#",\n    "#...#.#",\n    "###.#.#",\n    "#...#.#",\n    "#.###.#",\n    "#....G#",\n    "#######",\n  },\n  { -- 4: first dead end (with a bonus star in it)\n    "########",\n    "#S...#G#",\n    "####.#.#",\n    "#....#.#",\n    "#.####.#",\n    "#......#",\n    "#.####.#",\n    "#.*#...#",\n    "########",\n  },\n  { -- 5: wide breather with forks\n    "#########",\n    "#...#..G#",\n    "#.#.#.###",\n    "#S#...###",\n    "#########",\n  },\n  { -- 6: taller winder (star on the bottom lane)\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#...*...#",\n    "#########",\n  },\n  { -- 7: long way around\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 8: spiral\n    "#########",\n    "#.......#",\n    "#.#####.#",\n    "#.#G..#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#S#...#.#",\n    "#.###.#.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 9: forks everywhere\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#G#",\n    "#.....#.#",\n    "#####...#",\n    "#########",\n  },\n  { -- 10: the big one\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#.....#",\n    "#.#.#####",\n    "#...#..G#",\n    "#.####.##",\n    "#......##",\n    "#########",\n  },\n  { -- 11: side pocket with a star\n    "#########",\n    "#S..#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 12: the decoy web (star deep inside it)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#*#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 13: tall twin combs\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 14: two towers (star on the high shelf)\n    "#########",\n    "#S..#..*#",\n    "#.#.#.###",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#..G#",\n    "#########",\n  },\n  { -- 15: down and around\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 16: the long spiral\n    "#########",\n    "#S......#",\n    "#######.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#G#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 17: forks galore\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#...#...#",\n    "###.#.#.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 18: the ladder (star nook near the start)\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#....*#.#",\n    "#######.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 19: the deep drop (star at the bottom of the wrong turn)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G....#*#",\n    "#########",\n  },\n  { -- 20: the super one\n    "#########",\n    "#S#.....#",\n    "#.#.###.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#...#.###",\n    "#.###.#.#",\n    "#.#.....#",\n    "#.#.#.#.#",\n    "#.#.#*#.#",\n    "#...#.#G#",\n    "#########",\n  },\n}\n\nlocal CONFETTI = { 8, 9, 10, 11, 12, 14 }\n\nlocal MOVE_SPEED = 5      -- cells per second while sliding\nlocal BUMP_TIME = 0.3     -- seconds for a wall bounce wiggle\nlocal WIN_TIME = 1.5      -- seconds of happy wiggle before next level\nlocal ALLDONE_TIME = 4.5  -- the big "you did all 20!" party\n\nlocal level               -- 1-based, keeps counting past #LEVELS (super loop)\nlocal superLoop = false   -- past the first 20: SUPER MAZE (walked backwards)\nlocal grid                -- grid[y][x] == true means wall\nlocal cols, rows\nlocal cell, ox, oy        -- cell size in px + maze origin on canvas\nlocal px, py              -- critter cell position\nlocal goalX, goalY\nlocal starX, starY        -- nil when the level has no bonus star\nlocal starGot = false\nlocal starsTotal = 0      -- persisted count of bonus stars munched\nlocal allDone = false     -- persisted: finished all 20 at least once\nlocal moving              -- nil | {dx,dy,t}  slide between cells, t 0..1\nlocal bump                -- nil | {dx,dy,t}  gentle bounce off a wall\nlocal facing = { x = 1, y = 0 }\nlocal state               -- "play" | "win" | "alldone"\nlocal winT = 0\nlocal stepAlt = false\nlocal toneq = {}          -- scheduled tones: {at, freq, ms}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function loadLevel(n)\n  local def = LEVELS[((n - 1) % #LEVELS) + 1]\n  superLoop = n > #LEVELS\n  -- transpose the authored grid: def line x, char y -> landscape cell (x, y)\n  rows = #def[1]\n  cols = #def\n  grid = {}\n  starX, starY = nil, nil\n  for y = 1, rows do\n    grid[y] = {}\n    for x = 1, cols do\n      local ch = string.sub(def[x], y, y)\n      grid[y][x] = (ch == "#")\n      if ch == "S" then\n        px, py = x, y\n      elseif ch == "G" then\n        goalX, goalY = x, y\n      elseif ch == "*" then\n        starX, starY = x, y\n      end\n    end\n  end\n  if superLoop then\n    -- SUPER MAZE: start and cookie swap, so the maze walks the other way\n    px, py, goalX, goalY = goalX, goalY, px, py\n  end\n  starGot = false\n  cell = math.min(math.floor(464 / cols), math.floor(256 / rows), 44)\n  ox = math.floor((480 - cols * cell) / 2)\n  oy = 36 + math.floor((256 - rows * cell) / 2)\n  moving = nil\n  bump = nil\n  state = "play"\n  facing = { x = 1, y = 0 }\nend\n\nlocal function cellCenter(cx, cy)\n  return ox + (cx - 1) * cell + math.floor(cell / 2),\n         oy + (cy - 1) * cell + math.floor(cell / 2)\nend\n\nlocal function isWall(cx, cy)\n  if cx < 1 or cx > cols or cy < 1 or cy > rows then\n    return true\n  end\n  return grid[cy][cx]\nend\n\nlocal function tryMove(dx, dy)\n  facing = { x = dx, y = dy }\n  if isWall(px + dx, py + dy) then\n    if not bump then\n      bump = { dx = dx, dy = dy, t = 0 }\n      vupp.tone(98, 60)  -- soft low boop, never scary\n    end\n  else\n    moving = { dx = dx, dy = dy, t = 0 }\n    stepAlt = not stepAlt\n    vupp.tone(stepAlt and 294 or 330, 22, 0.15)  -- soft alternating step blip\n  end\nend\n\nlocal function levelDone()\n  -- Persist + tell the parent right away, so a hard suspend loses nothing.\n  vupp.store.set("level", level + 1)\n  vupp.emit("maze.level_done", { level = level })\n  scheduleTone(0.00, 180, 50)    -- munch,\n  scheduleTone(0.08, 150, 60)    -- munch!\n  scheduleTone(0.22, 523, 110)\n  scheduleTone(0.35, 659, 110)\n  scheduleTone(0.48, 784, 110)\n  scheduleTone(0.61, 1047, 180)\n  if ((level - 1) % #LEVELS) + 1 == #LEVELS and not allDone then\n    -- first time through all 20: the big moment\n    state = "alldone"\n    winT = ALLDONE_TIME\n    allDone = true\n    vupp.store.set("all_done", true)\n    vupp.emit("maze.all_done", { stars = starsTotal })\n    scheduleTone(0.90, 523, 90)\n    scheduleTone(1.00, 659, 90)\n    scheduleTone(1.10, 784, 90)\n    scheduleTone(1.20, 1047, 90)\n    scheduleTone(1.35, 1319, 260)\n  else\n    state = "win"\n    winT = WIN_TIME\n  end\nend\n\nfunction vupp.init()\n  level = vupp.store.get("level", 1)\n  starsTotal = vupp.store.get("stars", 0)\n  allDone = vupp.store.get("all_done", false)\n  loadLevel(level)\nend\n\nfunction vupp.update(dt)\n  pumpTones()\n\n  if state == "win" or state == "alldone" then\n    winT = winT - dt\n    if winT <= 0 then\n      level = level + 1\n      loadLevel(level)\n    end\n    return\n  end\n\n  if moving then\n    moving.t = moving.t + dt * MOVE_SPEED\n    if moving.t >= 1 then\n      px = px + moving.dx\n      py = py + moving.dy\n      moving = nil\n      if starX and not starGot and px == starX and py == starY then\n        starGot = true\n        starsTotal = starsTotal + 1\n        vupp.store.set("stars", starsTotal)\n        vupp.tone(660, 40, 0.5)      -- sparkly munch\n        scheduleTone(0.06, 880, 60)\n        scheduleTone(0.14, 1175, 80)\n      end\n      if px == goalX and py == goalY then\n        levelDone()\n      end\n    end\n    return\n  end\n\n  if bump then\n    bump.t = bump.t + dt / BUMP_TIME\n    if bump.t >= 1 then\n      bump = nil\n    end\n    return\n  end\n\n  if vupp.btn("up") then\n    tryMove(0, -1)\n  elseif vupp.btn("down") then\n    tryMove(0, 1)\n  elseif vupp.btn("left") then\n    tryMove(-1, 0)\n  elseif vupp.btn("right") then\n    tryMove(1, 0)\n  end\nend\n\nlocal function drawCookie(gfx)\n  local gx, gy = cellCenter(goalX, goalY)\n  local r = math.max(8, math.floor(cell * 0.34))\n  gfx.circle(gx, gy, r, 15, true)          -- cookie body (peach)\n  gfx.circle(gx, gy, r, 4, false)          -- crust edge\n  local c = math.max(2, math.floor(r / 4)) -- choc chips\n  gfx.circle(gx - math.floor(r / 2), gy - 2, c, 4, true)\n  gfx.circle(gx + math.floor(r / 3), gy - math.floor(r / 2), c, 4, true)\n  gfx.circle(gx + 2, gy + math.floor(r / 2), c, 4, true)\nend\n\nlocal function drawStarCookie(gfx)\n  local gx, gy = cellCenter(starX, starY)\n  local r = math.max(4, math.floor(cell * 0.2))\n  gfx.circle(gx, gy, r, 10, true)          -- gold heart of the star\n  gfx.circle(gx, gy - r - 2, 2, 10, true)  -- little points\n  gfx.circle(gx + r + 2, gy, 2, 10, true)\n  gfx.circle(gx, gy + r + 2, 2, 10, true)\n  gfx.circle(gx - r - 2, gy, 2, 10, true)\n  local tw = (math.floor(vupp.time() * 4) % 2) * 2\n  gfx.rect(gx + tw, gy - 2, 2, 2, 7, true) -- twinkle\nend\n\nlocal function drawCritter(gfx)\n  local cx, cy = cellCenter(px, py)\n  if moving then\n    local step = cell * moving.t\n    cx = cx + math.floor(moving.dx * step)\n    cy = cy + math.floor(moving.dy * step)\n  elseif bump then\n    local off = math.floor(math.sin(math.min(bump.t, 1) * math.pi) * 6)\n    cx = cx + bump.dx * off\n    cy = cy + bump.dy * off\n  end\n\n  local r = math.max(10, math.floor(cell * 0.38))\n  local happy = (state == "win" or state == "alldone")\n  if happy then\n    -- happy wiggle: bounce + tilt sparkle\n    cy = cy - math.floor(math.abs(math.sin(vupp.time() * 10)) * 8)\n    local a = vupp.time() * 6\n    gfx.circle(cx + math.floor(math.cos(a) * (r + 12)),\n               cy + math.floor(math.sin(a) * (r + 12)), 2, 10, true)\n    gfx.circle(cx - math.floor(math.cos(a) * (r + 12)),\n               cy - math.floor(math.sin(a) * (r + 12)), 2, 7, true)\n  end\n\n  -- feet\n  gfx.circle(cx - math.floor(r / 2), cy + r - 2, 4, 9, true)\n  gfx.circle(cx + math.floor(r / 2), cy + r - 2, 4, 9, true)\n  -- round yellow body\n  gfx.circle(cx, cy, r, 10, true)\n  gfx.circle(cx, cy, r, 9, false)\n  -- cheeks\n  local ex = math.max(4, math.floor(r * 0.35))\n  gfx.circle(cx - ex - 2, cy + 4, 2, 14, true)\n  gfx.circle(cx + ex + 2, cy + 4, 2, 14, true)\n  -- eyes look where the critter walks\n  local lx = cx - ex + facing.x * 2\n  local rx = cx + ex + facing.x * 2\n  local ey = cy - math.floor(r * 0.25) + facing.y * 2\n  gfx.circle(lx, ey, 4, 7, true)\n  gfx.circle(rx, ey, 4, 7, true)\n  gfx.circle(lx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  gfx.circle(rx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  -- mouth: little smile, big open smile when winning\n  if happy then\n    gfx.circle(cx, cy + math.floor(r * 0.35), 4, 8, true)\n  else\n    gfx.line(cx - 2, cy + math.floor(r * 0.4), cx + 2, cy + math.floor(r * 0.4), 4)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- progress pips across the top: done, current, upcoming (20 tiny dots)\n  local cur = ((level - 1) % #LEVELS) + 1\n  local n = #LEVELS\n  local startX = math.floor(240 - (n * 14) / 2) + 8\n  for i = 1, n do\n    local x = startX + (i - 1) * 14\n    if i < cur then\n      gfx.circle(x, 18, 4, 10, true)\n    elseif i == cur then\n      gfx.circle(x, 18, 6, 7, false)\n      gfx.circle(x, 18, 2, 10, true)\n    else\n      gfx.circle(x, 18, 4, 13, false)\n    end\n  end\n  -- tiny label for grown-ups only\n  gfx.text(tostring(level), 8, 12, 6, 2)\n\n  -- SUPER MAZE badge on the harder loop, in the bottom-right strip\n  if superLoop then\n    gfx.circle(320, 304, 6, 10, true)\n    gfx.circle(320, 296, 2, 10, true)\n    gfx.circle(328, 304, 2, 10, true)\n    gfx.circle(312, 304, 2, 10, true)\n    gfx.text("super maze", 340, 296, 14, 2)\n  end\n\n  -- maze floor + walls (SUPER MAZE gets its own wall colors)\n  local wallBody = superLoop and 2 or 3\n  local wallTop = superLoop and 14 or 11\n  gfx.rect(ox, oy, cols * cell, rows * cell, 0, true)\n  for y = 1, rows do\n    for x = 1, cols do\n      if grid[y][x] then\n        local wx = ox + (x - 1) * cell\n        local wy = oy + (y - 1) * cell\n        gfx.rect(wx, wy, cell, cell, wallBody, true)\n        gfx.rect(wx, wy, cell, 4, wallTop, true)\n      end\n    end\n  end\n\n  drawCookie(gfx)\n  if starX and not starGot then\n    drawStarCookie(gfx)\n  end\n  drawCritter(gfx)\n\n  -- bonus star count, tucked small in the bottom-left strip\n  if starsTotal > 0 then\n    gfx.circle(16, 304, 6, 10, true)\n    gfx.circle(16, 296, 2, 10, true)\n    gfx.text(tostring(starsTotal), 32, 296, 6, 2)\n  end\n\n  -- the big first-time-through celebration\n  if state == "alldone" then\n    gfx.rect(104, 136, 272, 48, 7, true)\n    gfx.rect(104, 136, 272, 48, 10, false)\n    gfx.text("you did all 20!", 150, 151, 8, 3)\n    local a = vupp.time() * 5\n    for i = 0, 5 do\n      local sx = 240 + math.floor(math.cos(a + i) * (60 + i * 16))\n      local sy = 160 + math.floor(math.sin(a + i) * (48 + i * 8))\n      gfx.circle(sx, sy, 2, CONFETTI[i + 1], true)\n    end\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Maze: walk a little round critter through a maze to the cookie.\n-- D-pad only, no timer, no lives; walls just gently bounce.\n-- v1.1: 20 hand-authored mazes, bonus star cookies tucked off the path,\n-- soft step blips + a munch at the cookie, a big "you did all 20!" moment,\n-- and a labeled SUPER MAZE loop afterwards (same mazes, walked backwards,\n-- new wall colors) instead of a silent recycle.\n-- Native 480x320 canvas (engine v14, hires), default PICO-8 palette\n-- (docs/07-app-library.md).\n-- The hand-authored (mostly tall) level grids are transposed at load so the\n-- mazes run wide, same walls, same paths, same solvability.\n\n-- Level data: "#" wall, "." floor, "S" start, "G" goal (cookie),\n-- "*" bonus star cookie (off the direct path).\n-- All levels validated solvable; after 20 they loop as SUPER MAZE\n-- (start and cookie swap places, so every maze walks the other way).\nlocal LEVELS = {\n  { -- 1: one bend\n    "#####",\n    "#S..#",\n    "###.#",\n    "#G..#",\n    "#####",\n  },\n  { -- 2: a couple of turns\n    "#######",\n    "#S....#",\n    "#####.#",\n    "#..#..#",\n    "#..#.##",\n    "#G...##",\n    "#######",\n  },\n  { -- 3: serpentine\n    "#######",\n    "#S#...#",\n    "#.#.#.#",\n    "#...#.#",\n    "###.#.#",\n    "#...#.#",\n    "#.###.#",\n    "#....G#",\n    "#######",\n  },\n  { -- 4: first dead end (with a bonus star in it)\n    "########",\n    "#S...#G#",\n    "####.#.#",\n    "#....#.#",\n    "#.####.#",\n    "#......#",\n    "#.####.#",\n    "#.*#...#",\n    "########",\n  },\n  { -- 5: wide breather with forks\n    "#########",\n    "#...#..G#",\n    "#.#.#.###",\n    "#S#...###",\n    "#########",\n  },\n  { -- 6: taller winder (star on the bottom lane)\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#...*...#",\n    "#########",\n  },\n  { -- 7: long way around\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 8: spiral\n    "#########",\n    "#.......#",\n    "#.#####.#",\n    "#.#G..#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#S#...#.#",\n    "#.###.#.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 9: forks everywhere\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#G#",\n    "#.....#.#",\n    "#####...#",\n    "#########",\n  },\n  { -- 10: the big one\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#.....#",\n    "#.#.#####",\n    "#...#..G#",\n    "#.####.##",\n    "#......##",\n    "#########",\n  },\n  { -- 11: side pocket with a star\n    "#########",\n    "#S..#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 12: the decoy web (star deep inside it)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#*#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.....#.#",\n    "#####.#.#",\n    "#G....#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 13: tall twin combs\n    "#########",\n    "#S..#...#",\n    "###.#.#.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#.#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 14: two towers (star on the high shelf)\n    "#########",\n    "#S..#..*#",\n    "#.#.#.###",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#...#..G#",\n    "#########",\n  },\n  { -- 15: down and around\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#.#####.#",\n    "#.#*..#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 16: the long spiral\n    "#########",\n    "#S......#",\n    "#######.#",\n    "#.....#.#",\n    "#.###.#.#",\n    "#.#G#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#.......#",\n    "#########",\n  },\n  { -- 17: forks galore\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.#####.#",\n    "#...#...#",\n    "###.#.#.#",\n    "#*..#..G#",\n    "#########",\n  },\n  { -- 18: the ladder (star nook near the start)\n    "#########",\n    "#S......#",\n    "#.#####.#",\n    "#....*#.#",\n    "#######.#",\n    "#.#...#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#.#.#.#.#",\n    "#G..#...#",\n    "#########",\n  },\n  { -- 19: the deep drop (star at the bottom of the wrong turn)\n    "#########",\n    "#...#..S#",\n    "#.#.#.#.#",\n    "#.#...#.#",\n    "#.###.#.#",\n    "#.#...#.#",\n    "#.#.###.#",\n    "#.#.#...#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#G....#*#",\n    "#########",\n  },\n  { -- 20: the super one\n    "#########",\n    "#S#.....#",\n    "#.#.###.#",\n    "#.#.#.#.#",\n    "#...#.#.#",\n    "###.#.#.#",\n    "#...#.###",\n    "#.###.#.#",\n    "#.#.....#",\n    "#.#.#.#.#",\n    "#.#.#*#.#",\n    "#...#.#G#",\n    "#########",\n  },\n}\n\nlocal CONFETTI = { 8, 9, 10, 11, 12, 14 }\n\nlocal MOVE_SPEED = 5      -- cells per second while sliding\nlocal BUMP_TIME = 0.3     -- seconds for a wall bounce wiggle\nlocal WIN_TIME = 1.5      -- seconds of happy wiggle before next level\nlocal ALLDONE_TIME = 4.5  -- the big "you did all 20!" party\n\nlocal level               -- 1-based, keeps counting past #LEVELS (super loop)\nlocal superLoop = false   -- past the first 20: SUPER MAZE (walked backwards)\nlocal grid                -- grid[y][x] == true means wall\nlocal cols, rows\nlocal cell, ox, oy        -- cell size in px + maze origin on canvas\nlocal px, py              -- critter cell position\nlocal goalX, goalY\nlocal starX, starY        -- nil when the level has no bonus star\nlocal starGot = false\nlocal starsTotal = 0      -- persisted count of bonus stars munched\nlocal allDone = false     -- persisted: finished all 20 at least once\nlocal moving              -- nil | {dx,dy,t}  slide between cells, t 0..1\nlocal bump                -- nil | {dx,dy,t}  gentle bounce off a wall\nlocal facing = { x = 1, y = 0 }\nlocal state               -- "play" | "win" | "alldone"\nlocal winT = 0\nlocal stepAlt = false\nlocal toneq = {}          -- scheduled tones: {at, freq, ms}\n\nlocal function scheduleTone(delay, freq, ms)\n  toneq[#toneq + 1] = { at = vupp.time() + delay, freq = freq, ms = ms }\nend\n\nlocal function pumpTones()\n  local now = vupp.time()\n  local i = 1\n  while i <= #toneq do\n    if toneq[i].at <= now then\n      vupp.tone(toneq[i].freq, toneq[i].ms)\n      table.remove(toneq, i)\n    else\n      i = i + 1\n    end\n  end\nend\n\nlocal function loadLevel(n)\n  local def = LEVELS[((n - 1) % #LEVELS) + 1]\n  superLoop = n > #LEVELS\n  -- transpose the authored grid: def line x, char y -> landscape cell (x, y)\n  rows = #def[1]\n  cols = #def\n  grid = {}\n  starX, starY = nil, nil\n  for y = 1, rows do\n    grid[y] = {}\n    for x = 1, cols do\n      local ch = string.sub(def[x], y, y)\n      grid[y][x] = (ch == "#")\n      if ch == "S" then\n        px, py = x, y\n      elseif ch == "G" then\n        goalX, goalY = x, y\n      elseif ch == "*" then\n        starX, starY = x, y\n      end\n    end\n  end\n  if superLoop then\n    -- SUPER MAZE: start and cookie swap, so the maze walks the other way\n    px, py, goalX, goalY = goalX, goalY, px, py\n  end\n  starGot = false\n  cell = math.min(math.floor(464 / cols), math.floor(256 / rows), 44)\n  ox = math.floor((480 - cols * cell) / 2)\n  oy = 36 + math.floor((256 - rows * cell) / 2)\n  moving = nil\n  bump = nil\n  state = "play"\n  facing = { x = 1, y = 0 }\nend\n\nlocal function cellCenter(cx, cy)\n  return ox + (cx - 1) * cell + math.floor(cell / 2),\n         oy + (cy - 1) * cell + math.floor(cell / 2)\nend\n\nlocal function isWall(cx, cy)\n  if cx < 1 or cx > cols or cy < 1 or cy > rows then\n    return true\n  end\n  return grid[cy][cx]\nend\n\nlocal function tryMove(dx, dy)\n  facing = { x = dx, y = dy }\n  if isWall(px + dx, py + dy) then\n    if not bump then\n      bump = { dx = dx, dy = dy, t = 0 }\n      vupp.tone(98, 60)  -- soft low boop, never scary\n    end\n  else\n    moving = { dx = dx, dy = dy, t = 0 }\n    stepAlt = not stepAlt\n    vupp.tone(stepAlt and 294 or 330, 22, 0.15)  -- soft alternating step blip\n  end\nend\n\nlocal function levelDone()\n  -- Persist + tell the parent right away, so a hard suspend loses nothing.\n  vupp.store.set("level", level + 1)\n  vupp.emit("maze.level_done", { level = level })\n  scheduleTone(0.00, 180, 50)    -- munch,\n  scheduleTone(0.08, 150, 60)    -- munch!\n  scheduleTone(0.22, 523, 110)\n  scheduleTone(0.35, 659, 110)\n  scheduleTone(0.48, 784, 110)\n  scheduleTone(0.61, 1047, 180)\n  if ((level - 1) % #LEVELS) + 1 == #LEVELS and not allDone then\n    -- first time through all 20: the big moment\n    state = "alldone"\n    winT = ALLDONE_TIME\n    allDone = true\n    vupp.store.set("all_done", true)\n    vupp.emit("maze.all_done", { stars = starsTotal })\n    scheduleTone(0.90, 523, 90)\n    scheduleTone(1.00, 659, 90)\n    scheduleTone(1.10, 784, 90)\n    scheduleTone(1.20, 1047, 90)\n    scheduleTone(1.35, 1319, 260)\n  else\n    state = "win"\n    winT = WIN_TIME\n  end\nend\n\nfunction vupp.init()\n  level = vupp.store.get("level", 1)\n  starsTotal = vupp.store.get("stars", 0)\n  allDone = vupp.store.get("all_done", false)\n  loadLevel(level)\nend\n\nfunction vupp.update(dt)\n  pumpTones()\n\n  if state == "win" or state == "alldone" then\n    winT = winT - dt\n    if winT <= 0 then\n      level = level + 1\n      loadLevel(level)\n    end\n    return\n  end\n\n  if moving then\n    moving.t = moving.t + dt * MOVE_SPEED\n    if moving.t >= 1 then\n      px = px + moving.dx\n      py = py + moving.dy\n      moving = nil\n      if starX and not starGot and px == starX and py == starY then\n        starGot = true\n        starsTotal = starsTotal + 1\n        vupp.store.set("stars", starsTotal)\n        vupp.tone(660, 40, 0.5)      -- sparkly munch\n        scheduleTone(0.06, 880, 60)\n        scheduleTone(0.14, 1175, 80)\n      end\n      if px == goalX and py == goalY then\n        levelDone()\n      end\n    end\n    return\n  end\n\n  if bump then\n    bump.t = bump.t + dt / BUMP_TIME\n    if bump.t >= 1 then\n      bump = nil\n    end\n    return\n  end\n\n  if vupp.btn("up") then\n    tryMove(0, -1)\n  elseif vupp.btn("down") then\n    tryMove(0, 1)\n  elseif vupp.btn("left") then\n    tryMove(-1, 0)\n  elseif vupp.btn("right") then\n    tryMove(1, 0)\n  end\nend\n\nlocal function drawCookie(gfx)\n  local gx, gy = cellCenter(goalX, goalY)\n  local r = math.max(8, math.floor(cell * 0.34))\n  gfx.circle(gx, gy, r, 15, true)          -- cookie body (peach)\n  gfx.circle(gx, gy, r, 4, false)          -- crust edge\n  local c = math.max(2, math.floor(r / 4)) -- choc chips\n  gfx.circle(gx - math.floor(r / 2), gy - 2, c, 4, true)\n  gfx.circle(gx + math.floor(r / 3), gy - math.floor(r / 2), c, 4, true)\n  gfx.circle(gx + 2, gy + math.floor(r / 2), c, 4, true)\nend\n\nlocal function drawStarCookie(gfx)\n  local gx, gy = cellCenter(starX, starY)\n  local r = math.max(4, math.floor(cell * 0.2))\n  gfx.circle(gx, gy, r, 10, true)          -- gold heart of the star\n  gfx.circle(gx, gy - r - 2, 2, 10, true)  -- little points\n  gfx.circle(gx + r + 2, gy, 2, 10, true)\n  gfx.circle(gx, gy + r + 2, 2, 10, true)\n  gfx.circle(gx - r - 2, gy, 2, 10, true)\n  local tw = (math.floor(vupp.time() * 4) % 2) * 2\n  gfx.rect(gx + tw, gy - 2, 2, 2, 7, true) -- twinkle\nend\n\nlocal function drawCritter(gfx)\n  local cx, cy = cellCenter(px, py)\n  if moving then\n    local step = cell * moving.t\n    cx = cx + math.floor(moving.dx * step)\n    cy = cy + math.floor(moving.dy * step)\n  elseif bump then\n    local off = math.floor(math.sin(math.min(bump.t, 1) * math.pi) * 6)\n    cx = cx + bump.dx * off\n    cy = cy + bump.dy * off\n  end\n\n  local r = math.max(10, math.floor(cell * 0.38))\n  local happy = (state == "win" or state == "alldone")\n  if happy then\n    -- happy wiggle: bounce + tilt sparkle\n    cy = cy - math.floor(math.abs(math.sin(vupp.time() * 10)) * 8)\n    local a = vupp.time() * 6\n    gfx.circle(cx + math.floor(math.cos(a) * (r + 12)),\n               cy + math.floor(math.sin(a) * (r + 12)), 2, 10, true)\n    gfx.circle(cx - math.floor(math.cos(a) * (r + 12)),\n               cy - math.floor(math.sin(a) * (r + 12)), 2, 7, true)\n  end\n\n  -- feet\n  gfx.circle(cx - math.floor(r / 2), cy + r - 2, 4, 9, true)\n  gfx.circle(cx + math.floor(r / 2), cy + r - 2, 4, 9, true)\n  -- round yellow body\n  gfx.circle(cx, cy, r, 10, true)\n  gfx.circle(cx, cy, r, 9, false)\n  -- cheeks\n  local ex = math.max(4, math.floor(r * 0.35))\n  gfx.circle(cx - ex - 2, cy + 4, 2, 14, true)\n  gfx.circle(cx + ex + 2, cy + 4, 2, 14, true)\n  -- eyes look where the critter walks\n  local lx = cx - ex + facing.x * 2\n  local rx = cx + ex + facing.x * 2\n  local ey = cy - math.floor(r * 0.25) + facing.y * 2\n  gfx.circle(lx, ey, 4, 7, true)\n  gfx.circle(rx, ey, 4, 7, true)\n  gfx.circle(lx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  gfx.circle(rx + facing.x * 2, ey + facing.y * 2, 2, 0, true)\n  -- mouth: little smile, big open smile when winning\n  if happy then\n    gfx.circle(cx, cy + math.floor(r * 0.35), 4, 8, true)\n  else\n    gfx.line(cx - 2, cy + math.floor(r * 0.4), cx + 2, cy + math.floor(r * 0.4), 4)\n  end\nend\n\nfunction vupp.draw(gfx)\n  gfx.clear(1)\n\n  -- progress pips across the top: done, current, upcoming (20 tiny dots)\n  local cur = ((level - 1) % #LEVELS) + 1\n  local n = #LEVELS\n  local startX = math.floor(240 - (n * 14) / 2) + 8\n  for i = 1, n do\n    local x = startX + (i - 1) * 14\n    if i < cur then\n      gfx.circle(x, 18, 4, 10, true)\n    elseif i == cur then\n      gfx.circle(x, 18, 6, 7, false)\n      gfx.circle(x, 18, 2, 10, true)\n    else\n      gfx.circle(x, 18, 4, 13, false)\n    end\n  end\n  -- tiny label for grown-ups only\n  gfx.text(tostring(level), 8, 12, 6, 2)\n\n  -- SUPER MAZE badge on the harder loop, in the bottom-right strip\n  if superLoop then\n    gfx.circle(320, 304, 6, 10, true)\n    gfx.circle(320, 296, 2, 10, true)\n    gfx.circle(328, 304, 2, 10, true)\n    gfx.circle(312, 304, 2, 10, true)\n    gfx.text("super maze", 340, 296, 14, 2)\n  end\n\n  -- maze floor + walls (SUPER MAZE gets its own wall colors)\n  local wallBody = superLoop and 2 or 3\n  local wallTop = superLoop and 14 or 11\n  gfx.rect(ox, oy, cols * cell, rows * cell, 0, true)\n  for y = 1, rows do\n    for x = 1, cols do\n      if grid[y][x] then\n        local wx = ox + (x - 1) * cell\n        local wy = oy + (y - 1) * cell\n        gfx.rect(wx, wy, cell, cell, wallBody, true)\n        gfx.rect(wx, wy, cell, 4, wallTop, true)\n      end\n    end\n  end\n\n  drawCookie(gfx)\n  if starX and not starGot then\n    drawStarCookie(gfx)\n  end\n  drawCritter(gfx)\n\n  -- bonus star count, tucked small in the bottom-left strip\n  if starsTotal > 0 then\n    gfx.circle(16, 304, 6, 10, true)\n    gfx.circle(16, 296, 2, 10, true)\n    gfx.text(tostring(starsTotal), 32, 296, 6, 2)\n  end\n\n  -- the big first-time-through celebration\n  if state == "alldone" then\n    gfx.rect(104, 136, 272, 48, 7, true)\n    gfx.rect(104, 136, 272, 48, 10, false)\n    gfx.text("you did all 20!", 150, 151, 8, 3)\n    local a = vupp.time() * 5\n    for i = 0, 5 do\n      local sx = 240 + math.floor(math.cos(a + i) * (60 + i * 16))\n      local sy = 160 + math.floor(math.sin(a + i) * (48 + i * 8))\n      gfx.circle(sx, sy, 2, CONFETTI[i + 1], true)\n    end\n  end\nend\n'
       }
     },
     {
@@ -2844,7 +3910,7 @@ end
         }
       },
       "music.tune_saved": {
-        "description": "Your kid recorded a tune \u2014 it's synced for you to hear about",
+        "description": "Your kid recorded a tune, it's synced for you to hear about",
         "schema": {
           "type": "object",
           "properties": {
@@ -2885,7 +3951,7 @@ end
 -- the bars lighting up. The last tune survives relaunch in vupp.store and
 -- syncs to the parent app as a 'tune' document.
 -- The star cycles teach mode: 4 built-in songs where the next bar glows with a
--- bouncing star and the song advances as the kid hits it \u2014 icons only, no
+-- bouncing star and the song advances as the kid hits it, icons only, no
 -- reading. Wrong notes still play (no fail states).
 -- Canvas 480x320 (native hires, engine v14), default PICO-8 palette
 -- (docs/07-app-library.md).
@@ -3354,7 +4420,7 @@ end
       lines: 411,
       files: {
         "app.json": '{\n  "slug": "ripple",\n  "title": "Ripple",\n  "version": "2.0.0",\n  "author": "Vupp",\n  "category": "creative",\n  "fps": 30,\n  "capabilities": [\n    "touch"\n  ],\n  "min_engine": 14,\n  "hires": true,\n  "parent": {\n    "version": 1,\n    "documents": {\n      "store": {\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "Total quiet time your kid has spent in Ripple"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Rings rippled across the pond, ever"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles gently popped, ever"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated up into the night sky, ever"\n            }\n          }\n        },\n        "sync": "always",\n        "description": "How much winding-down time your kid has spent in Ripple"\n      }\n    },\n    "commands": {},\n    "events": {\n      "calm.quiet_time": {\n        "description": "Your kid spent some quiet time in Ripple settling down",\n        "schema": {\n          "type": "object",\n          "properties": {\n            "seconds": {\n              "type": "number",\n              "description": "How long this quiet sit lasted"\n            },\n            "ripples": {\n              "type": "number",\n              "description": "Pond rings made this time"\n            },\n            "pops": {\n              "type": "number",\n              "description": "Bubbles popped this time"\n            },\n            "stars": {\n              "type": "number",\n              "description": "Stars floated this time"\n            }\n          }\n        }\n      }\n    }\n  },\n  "palette": [\n    "#0c1120",\n    "#14263d",\n    "#46375e",\n    "#175048",\n    "#6b5a45",\n    "#3d4d60",\n    "#8ba3b5",\n    "#e8f2f5",\n    "#d6907f",\n    "#d6a869",\n    "#ead9a0",\n    "#78bd9d",\n    "#6da8d6",\n    "#9b8fbd",\n    "#d6a8bd",\n    "#a8c2c6"\n  ]\n}\n',
-        "main.lua": '-- luacheck: globals vupp\n-- Ripple: a quiet sensory toy \u2014 three little scenes, no goals, no score, no\n-- timer, no end. Pond: touch the water and perfectly predictable rings spread\n-- from your finger with a soft descending note (same spot, same sound, every\n-- time). Pop: a grid of soft bubbles to press \u2014 each column hums its own\n-- pentatonic note, and an empty grid quietly refills itself. Sky: hold a\n-- finger anywhere and little stars stream up and drift away. Nothing moves\n-- fast, nothing appears suddenly, nothing ever fails. B cycles scenes (or tap\n-- the three dots at the bottom); d-pad moves a gentle cursor and A does what\n-- a finger would, so every path works without touch. Canvas 480x320 (native\n-- hires, engine v14), custom low-arousal pond/dusk palette (see app.json).\n\nlocal t = 0\nlocal scene = 1              -- 1 pond, 2 pop, 3 sky\nlocal touchWasDown = false\nlocal dpadActive = false\nlocal cx, cy = 240, 160      -- d-pad cursor (pond + sky)\nlocal saveTick = 0\n\n-- lifetime counters (loaded in init, saved on exit and every ~30 s)\nlocal ripplesEver, popsEver, starsEver, secondsEver = 0, 0, 0, 0\nlocal nRip, nPop, nStar = 0, 0, 0   -- this session\n\n-- pond ----------------------------------------------------------------------\nlocal ripples = {}           -- {x, y, r, age}\nlocal lastRipX, lastRipY, lastRipT = -99, -99, -99\nlocal lastToneT = -99\nlocal aHold = 0\n\n-- pop -----------------------------------------------------------------------\nlocal COLS, ROWS = 5, 3\nlocal CELL = 72\nlocal GX, GY = 60, 28\nlocal COL_NOTES = { 262, 330, 392, 440, 523 }  -- left column lowest, pentatonic\nlocal pop = {}               -- [i] = {popped, age}\nlocal sparkles = {}          -- {x, y, dx, dy, age}\nlocal refillWait = 0         -- pause after the last pop before refilling\nlocal refillI = 0            -- >0 while bubbles grow back one by one\nlocal refillTick = 0\nlocal sel = { r = 2, c = 3 }\n\n-- sky -----------------------------------------------------------------------\nlocal STARS = {\n  { 36, 24, 0.0 }, { 132, 12, 1.1 }, { 228, 30, 2.3 }, { 324, 16, 3.1 },\n  { 438, 34, 4.2 }, { 66, 70, 5.0 }, { 174, 58, 0.7 }, { 288, 74, 1.9 },\n  { 414, 82, 2.8 }, { 30, 122, 3.7 }, { 210, 112, 4.6 }, { 354, 128, 5.5 },\n  { 102, 170, 0.4 }, { 264, 182, 1.5 }, { 450, 162, 2.1 }, { 156, 224, 3.4 },\n  { 372, 234, 4.9 }, { 48, 266, 5.8 },\n}\nlocal stars = {}             -- {x0, y, vy, ph, age}\nlocal starTick = 0\nlocal airT = 0\n\nlocal function clamp(v, lo, hi)\n  if v < lo then return lo end\n  if v > hi then return hi end\n  return v\nend\n\nlocal function initPop()\n  for i = 1, COLS * ROWS do\n    pop[i] = { popped = false, age = 1 }\n  end\nend\n\nfunction vupp.init()\n  ripplesEver = vupp.store.get("ripples", 0)\n  popsEver = vupp.store.get("pops", 0)\n  starsEver = vupp.store.get("stars", 0)\n  secondsEver = vupp.store.get("seconds", 0)\n  initPop()\nend\n\nlocal function saveCounters()\n  vupp.store.set("ripples", ripplesEver + nRip)\n  vupp.store.set("pops", popsEver + nPop)\n  vupp.store.set("stars", starsEver + nStar)\n  vupp.store.set("seconds", secondsEver + math.floor(vupp.time()))\nend\n\nfunction vupp.on_exit()\n  saveCounters()\n  if vupp.time() >= 15 then\n    vupp.emit("calm.quiet_time", {\n      seconds = math.floor(vupp.time()),\n      ripples = nRip, pops = nPop, stars = nStar,\n    })\n  end\nend\n\n-- pond ----------------------------------------------------------------------\n\nlocal function spawnRipple(x, y)\n  if #ripples >= 24 then table.remove(ripples, 1) end\n  ripples[#ripples + 1] = { x = x, y = y, r = 4, age = 0 }\n  nRip = nRip + 1\n  lastRipX, lastRipY, lastRipT = x, y, t\n  if t - lastToneT > 0.1 then\n    -- same height, same note \u2014 the sound is as predictable as the rings\n    local freq = 300 + (320 - y) * 1.35\n    vupp.tone(freq, 600, 0.2, "sine")\n    lastToneT = t\n  end\nend\n\nlocal function pondTouch(x, y, newPress)\n  local dx, dy = x - lastRipX, y - lastRipY\n  local far = dx * dx + dy * dy > 32 * 32\n  if newPress or far or t - lastRipT > 0.28 then\n    spawnRipple(x, y)\n  end\nend\n\nlocal function updatePond(dt, touch, newPress)\n  if touch and touch.y < 284 then\n    dpadActive = false\n    pondTouch(touch.x, touch.y, newPress)\n  end\n  if vupp.btnp("a") then\n    dpadActive = true\n    spawnRipple(cx, cy)\n    aHold = 0\n  elseif vupp.btn("a") then\n    aHold = aHold + dt\n    if aHold > 0.3 then\n      spawnRipple(cx, cy)\n      aHold = 0\n    end\n  end\n  local i = 1\n  while i <= #ripples do\n    local rp = ripples[i]\n    rp.r = rp.r + 52 * dt\n    rp.age = rp.age + dt\n    if rp.age > 2.4 then table.remove(ripples, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPond(gfx)\n  gfx.clear(3)\n  -- still-water specks, fixed forever\n  for _, p in ipairs({ { 90, 80 }, { 360, 58 }, { 192, 200 }, { 420, 254 }, { 54, 158 } }) do\n    gfx.rect(p[1], p[2], 2, 2, 5, true)\n  end\n  -- two lily pads, always in the same corner of the pond\n  gfx.circle(68, 56, 24, 11, true)\n  gfx.circle(84, 44, 10, 3, true)\n  gfx.circle(412, 256, 20, 11, true)\n  gfx.circle(400, 268, 8, 3, true)\n  -- the koi drifts one slow fixed loop \u2014 never startles, never hides\n  local kx = 240 + 168 * math.sin(t * 0.11)\n  local ky = 140 + 80 * math.sin(t * 0.083 + 1.9)\n  local dir = (math.cos(t * 0.11) >= 0) and 1 or -1\n  local sway = math.sin(t * 2.2) * 4\n  gfx.circle(math.floor(kx - dir * 22), math.floor(ky + sway), 4, 8, true)\n  gfx.circle(math.floor(kx - dir * 16), math.floor(ky + sway * 0.5), 6, 8, true)\n  gfx.circle(math.floor(kx), math.floor(ky), 14, 8, true)\n  gfx.circle(math.floor(kx + dir * 4), math.floor(ky - 4), 6, 9, true)\n  gfx.circle(math.floor(kx + dir * 8), math.floor(ky + 2), 2, 0, true)\n  for _, rp in ipairs(ripples) do\n    local rr = math.floor(rp.r)\n    local col = 7\n    if rp.age > 1.6 then col = 5 elseif rp.age > 0.8 then col = 12 end\n    gfx.circle(math.floor(rp.x), math.floor(rp.y), rr, col, false)\n    if rr > 16 then\n      gfx.circle(math.floor(rp.x), math.floor(rp.y), rr - 12, 5, false)\n    end\n  end\nend\n\n-- pop -----------------------------------------------------------------------\n\nlocal function cellCenter(r, c)\n  return GX + (c - 1) * CELL + CELL / 2, GY + (r - 1) * CELL + CELL / 2\nend\n\nlocal function popAt(r, c)\n  local i = (r - 1) * COLS + c\n  local b = pop[i]\n  if b.popped or refillI > 0 then return end\n  b.popped = true\n  b.age = 0\n  nPop = nPop + 1\n  vupp.tone(COL_NOTES[c], 140, 0.3, "sine")\n  local x, y = cellCenter(r, c)\n  for k = 1, 4 do\n    local a = k * 1.57 + 0.6\n    sparkles[#sparkles + 1] = {\n      x = x, y = y, dx = math.cos(a) * 68, dy = math.sin(a) * 68, age = 0,\n    }\n  end\n  for k = 1, COLS * ROWS do\n    if not pop[k].popped then return end\n  end\n  refillWait = 1.1   -- grid is empty: a calm beat, then it quietly comes back\nend\n\nlocal function updatePop(dt, touch)\n  if touch and touch.y < GY + ROWS * CELL then\n    dpadActive = false\n    local c = math.floor((touch.x - GX) / CELL) + 1\n    local r = math.floor((touch.y - GY) / CELL) + 1\n    if r >= 1 and r <= ROWS and c >= 1 and c <= COLS then\n      local x, y = cellCenter(r, c)\n      local dx, dy = touch.x - x, touch.y - y\n      if dx * dx + dy * dy <= 34 * 34 then popAt(r, c) end\n    end\n  end\n  if vupp.btnp("left") then sel.c = clamp(sel.c - 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("right") then sel.c = clamp(sel.c + 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("up") then sel.r = clamp(sel.r - 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("down") then sel.r = clamp(sel.r + 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("a") then\n    dpadActive = true\n    popAt(sel.r, sel.c)\n  end\n  for _, b in ipairs(pop) do\n    b.age = b.age + dt\n  end\n  if refillWait > 0 then\n    refillWait = refillWait - dt\n    if refillWait <= 0 then\n      refillI = 1\n      refillTick = 0\n    end\n  end\n  if refillI > 0 then\n    refillTick = refillTick - dt\n    if refillTick <= 0 then\n      pop[refillI] = { popped = false, age = 0 }\n      refillI = refillI + 1\n      refillTick = 0.15\n      if refillI > COLS * ROWS then refillI = 0 end\n    end\n  end\n  local i = 1\n  while i <= #sparkles do\n    local s = sparkles[i]\n    s.x = s.x + s.dx * dt\n    s.y = s.y + s.dy * dt\n    s.age = s.age + dt\n    if s.age > 0.4 then table.remove(sparkles, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPop(gfx)\n  gfx.clear(1)\n  for r = 1, ROWS do\n    for c = 1, COLS do\n      local b = pop[(r - 1) * COLS + c]\n      local x, y = cellCenter(r, c)\n      x, y = math.floor(x), math.floor(y)\n      if b.popped then\n        if b.age < 0.25 then\n          gfx.circle(x, y, math.floor(28 + b.age * 80), 7, false)\n        else\n          gfx.circle(x, y, 6, 5, false)\n        end\n      else\n        local rr = 28\n        if b.age < 0.3 then rr = math.max(2, math.floor(28 * b.age / 0.3)) end\n        gfx.circle(x, y, rr, 2, true)\n        gfx.circle(x, y, rr, 12, false)\n        if rr > 16 then gfx.circle(x - 10, y - 10, 4, 15, true) end\n      end\n    end\n  end\n  if dpadActive then\n    local x, y = cellCenter(sel.r, sel.c)\n    gfx.circle(math.floor(x), math.floor(y), 34, 10, false)\n  end\n  for _, s in ipairs(sparkles) do\n    gfx.circle(math.floor(s.x), math.floor(s.y), 2, 10, true)\n  end\nend\n\n-- sky -----------------------------------------------------------------------\n\nlocal function updateSky(dt, touch)\n  local hx, hy = nil, nil\n  if touch and touch.y < 284 then\n    dpadActive = false\n    hx, hy = touch.x, touch.y\n  elseif vupp.btn("a") then\n    dpadActive = true\n    hx, hy = cx, cy\n  end\n  if hx then\n    starTick = starTick - dt\n    if starTick <= 0 then\n      if #stars >= 60 then table.remove(stars, 1) end\n      stars[#stars + 1] = {\n        x0 = hx + vupp.rand(17) - 9, y = hy, vy = -36 - vupp.rand(20),\n        ph = vupp.rand(628) / 100, age = 0,\n      }\n      nStar = nStar + 1\n      starTick = 0.08\n    end\n    airT = airT - dt\n    if airT <= 0 then\n      vupp.tone(880, 700, 0.08, "sine")\n      airT = 0.9\n    end\n  else\n    airT = 0\n  end\n  local i = 1\n  while i <= #stars do\n    local s = stars[i]\n    s.y = s.y + s.vy * dt\n    s.age = s.age + dt\n    if s.age > 3 or s.y < -8 then table.remove(stars, i) else i = i + 1 end\n  end\nend\n\nlocal function drawSky(gfx)\n  gfx.clear(0)\n  -- a soft crescent moon, always in its spot\n  gfx.circle(392, 56, 24, 6, true)\n  gfx.circle(402, 48, 22, 0, true)\n  for i, st in ipairs(STARS) do\n    local b = math.sin(t * 0.7 + st[3])\n    local col = 5\n    if b > 0.4 then col = 7 elseif b > -0.3 then col = 6 end\n    if i % 4 == 0 then\n      gfx.circle(st[1], st[2], 2, col, true)\n    else\n      gfx.rect(st[1], st[2], 2, 2, col, true)\n    end\n  end\n  for _, s in ipairs(stars) do\n    local x = math.floor(s.x0 + math.sin(t * 2 + s.ph) * 8)\n    local y = math.floor(s.y)\n    local col = 13\n    if s.age < 1 then col = 7 elseif s.age < 2 then col = 10 end\n    gfx.circle(x, y, 2, col, true)\n    if s.age < 0.5 then gfx.circle(x, y, 4, col, false) end\n  end\nend\n\n-- shared --------------------------------------------------------------------\n\nlocal function switchScene(n)\n  if n ~= scene then\n    scene = n\n    vupp.tone(494, 70, 0.12, "sine")\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  local touch = vupp.touch()\n  local newPress = touch ~= nil and not touchWasDown\n  -- the three dots: tap to switch scene (B cycles for d-pad hands)\n  if newPress and touch.y >= 284 then\n    if touch.x < 228 then switchScene(1)\n    elseif touch.x < 252 then switchScene(2)\n    else switchScene(3) end\n    touchWasDown = true\n    return\n  end\n  if vupp.btnp("b") then\n    switchScene(scene % 3 + 1)\n  end\n  -- d-pad cursor glides in pond and sky (pop moves cell by cell)\n  if scene ~= 2 then\n    local spd = 220 * dt\n    if vupp.btn("left") then cx = cx - spd; dpadActive = true end\n    if vupp.btn("right") then cx = cx + spd; dpadActive = true end\n    if vupp.btn("up") then cy = cy - spd; dpadActive = true end\n    if vupp.btn("down") then cy = cy + spd; dpadActive = true end\n    cx = clamp(cx, 16, 464)\n    cy = clamp(cy, 16, 268)\n  end\n  if scene == 1 then\n    updatePond(dt, touch, newPress)\n  elseif scene == 2 then\n    updatePop(dt, touch)\n  else\n    updateSky(dt, touch)\n  end\n  touchWasDown = touch ~= nil\n  saveTick = saveTick + dt\n  if saveTick > 30 then\n    saveCounters()   -- hard-exit safe\n    saveTick = 0\n  end\nend\n\nfunction vupp.draw(gfx)\n  if scene == 1 then\n    drawPond(gfx)\n  elseif scene == 2 then\n    drawPop(gfx)\n  else\n    drawSky(gfx)\n  end\n  if dpadActive and scene ~= 2 then\n    gfx.circle(math.floor(cx), math.floor(cy), 10, 10, false)\n    gfx.rect(math.floor(cx), math.floor(cy), 2, 2, 10, true)\n  end\n  for i = 1, 3 do\n    local x = 192 + i * 24\n    if i == scene then\n      gfx.circle(x, 302, 6, 10, true)\n    else\n      gfx.circle(x, 302, 6, 5, false)\n    end\n  end\nend\n'
+        "main.lua": '-- luacheck: globals vupp\n-- Ripple: a quiet sensory toy, three little scenes, no goals, no score, no\n-- timer, no end. Pond: touch the water and perfectly predictable rings spread\n-- from your finger with a soft descending note (same spot, same sound, every\n-- time). Pop: a grid of soft bubbles to press, each column hums its own\n-- pentatonic note, and an empty grid quietly refills itself. Sky: hold a\n-- finger anywhere and little stars stream up and drift away. Nothing moves\n-- fast, nothing appears suddenly, nothing ever fails. B cycles scenes (or tap\n-- the three dots at the bottom); d-pad moves a gentle cursor and A does what\n-- a finger would, so every path works without touch. Canvas 480x320 (native\n-- hires, engine v14), custom low-arousal pond/dusk palette (see app.json).\n\nlocal t = 0\nlocal scene = 1              -- 1 pond, 2 pop, 3 sky\nlocal touchWasDown = false\nlocal dpadActive = false\nlocal cx, cy = 240, 160      -- d-pad cursor (pond + sky)\nlocal saveTick = 0\n\n-- lifetime counters (loaded in init, saved on exit and every ~30 s)\nlocal ripplesEver, popsEver, starsEver, secondsEver = 0, 0, 0, 0\nlocal nRip, nPop, nStar = 0, 0, 0   -- this session\n\n-- pond ----------------------------------------------------------------------\nlocal ripples = {}           -- {x, y, r, age}\nlocal lastRipX, lastRipY, lastRipT = -99, -99, -99\nlocal lastToneT = -99\nlocal aHold = 0\n\n-- pop -----------------------------------------------------------------------\nlocal COLS, ROWS = 5, 3\nlocal CELL = 72\nlocal GX, GY = 60, 28\nlocal COL_NOTES = { 262, 330, 392, 440, 523 }  -- left column lowest, pentatonic\nlocal pop = {}               -- [i] = {popped, age}\nlocal sparkles = {}          -- {x, y, dx, dy, age}\nlocal refillWait = 0         -- pause after the last pop before refilling\nlocal refillI = 0            -- >0 while bubbles grow back one by one\nlocal refillTick = 0\nlocal sel = { r = 2, c = 3 }\n\n-- sky -----------------------------------------------------------------------\nlocal STARS = {\n  { 36, 24, 0.0 }, { 132, 12, 1.1 }, { 228, 30, 2.3 }, { 324, 16, 3.1 },\n  { 438, 34, 4.2 }, { 66, 70, 5.0 }, { 174, 58, 0.7 }, { 288, 74, 1.9 },\n  { 414, 82, 2.8 }, { 30, 122, 3.7 }, { 210, 112, 4.6 }, { 354, 128, 5.5 },\n  { 102, 170, 0.4 }, { 264, 182, 1.5 }, { 450, 162, 2.1 }, { 156, 224, 3.4 },\n  { 372, 234, 4.9 }, { 48, 266, 5.8 },\n}\nlocal stars = {}             -- {x0, y, vy, ph, age}\nlocal starTick = 0\nlocal airT = 0\n\nlocal function clamp(v, lo, hi)\n  if v < lo then return lo end\n  if v > hi then return hi end\n  return v\nend\n\nlocal function initPop()\n  for i = 1, COLS * ROWS do\n    pop[i] = { popped = false, age = 1 }\n  end\nend\n\nfunction vupp.init()\n  ripplesEver = vupp.store.get("ripples", 0)\n  popsEver = vupp.store.get("pops", 0)\n  starsEver = vupp.store.get("stars", 0)\n  secondsEver = vupp.store.get("seconds", 0)\n  initPop()\nend\n\nlocal function saveCounters()\n  vupp.store.set("ripples", ripplesEver + nRip)\n  vupp.store.set("pops", popsEver + nPop)\n  vupp.store.set("stars", starsEver + nStar)\n  vupp.store.set("seconds", secondsEver + math.floor(vupp.time()))\nend\n\nfunction vupp.on_exit()\n  saveCounters()\n  if vupp.time() >= 15 then\n    vupp.emit("calm.quiet_time", {\n      seconds = math.floor(vupp.time()),\n      ripples = nRip, pops = nPop, stars = nStar,\n    })\n  end\nend\n\n-- pond ----------------------------------------------------------------------\n\nlocal function spawnRipple(x, y)\n  if #ripples >= 24 then table.remove(ripples, 1) end\n  ripples[#ripples + 1] = { x = x, y = y, r = 4, age = 0 }\n  nRip = nRip + 1\n  lastRipX, lastRipY, lastRipT = x, y, t\n  if t - lastToneT > 0.1 then\n    -- same height, same note, the sound is as predictable as the rings\n    local freq = 300 + (320 - y) * 1.35\n    vupp.tone(freq, 600, 0.2, "sine")\n    lastToneT = t\n  end\nend\n\nlocal function pondTouch(x, y, newPress)\n  local dx, dy = x - lastRipX, y - lastRipY\n  local far = dx * dx + dy * dy > 32 * 32\n  if newPress or far or t - lastRipT > 0.28 then\n    spawnRipple(x, y)\n  end\nend\n\nlocal function updatePond(dt, touch, newPress)\n  if touch and touch.y < 284 then\n    dpadActive = false\n    pondTouch(touch.x, touch.y, newPress)\n  end\n  if vupp.btnp("a") then\n    dpadActive = true\n    spawnRipple(cx, cy)\n    aHold = 0\n  elseif vupp.btn("a") then\n    aHold = aHold + dt\n    if aHold > 0.3 then\n      spawnRipple(cx, cy)\n      aHold = 0\n    end\n  end\n  local i = 1\n  while i <= #ripples do\n    local rp = ripples[i]\n    rp.r = rp.r + 52 * dt\n    rp.age = rp.age + dt\n    if rp.age > 2.4 then table.remove(ripples, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPond(gfx)\n  gfx.clear(3)\n  -- still-water specks, fixed forever\n  for _, p in ipairs({ { 90, 80 }, { 360, 58 }, { 192, 200 }, { 420, 254 }, { 54, 158 } }) do\n    gfx.rect(p[1], p[2], 2, 2, 5, true)\n  end\n  -- two lily pads, always in the same corner of the pond\n  gfx.circle(68, 56, 24, 11, true)\n  gfx.circle(84, 44, 10, 3, true)\n  gfx.circle(412, 256, 20, 11, true)\n  gfx.circle(400, 268, 8, 3, true)\n  -- the koi drifts one slow fixed loop, never startles, never hides\n  local kx = 240 + 168 * math.sin(t * 0.11)\n  local ky = 140 + 80 * math.sin(t * 0.083 + 1.9)\n  local dir = (math.cos(t * 0.11) >= 0) and 1 or -1\n  local sway = math.sin(t * 2.2) * 4\n  gfx.circle(math.floor(kx - dir * 22), math.floor(ky + sway), 4, 8, true)\n  gfx.circle(math.floor(kx - dir * 16), math.floor(ky + sway * 0.5), 6, 8, true)\n  gfx.circle(math.floor(kx), math.floor(ky), 14, 8, true)\n  gfx.circle(math.floor(kx + dir * 4), math.floor(ky - 4), 6, 9, true)\n  gfx.circle(math.floor(kx + dir * 8), math.floor(ky + 2), 2, 0, true)\n  for _, rp in ipairs(ripples) do\n    local rr = math.floor(rp.r)\n    local col = 7\n    if rp.age > 1.6 then col = 5 elseif rp.age > 0.8 then col = 12 end\n    gfx.circle(math.floor(rp.x), math.floor(rp.y), rr, col, false)\n    if rr > 16 then\n      gfx.circle(math.floor(rp.x), math.floor(rp.y), rr - 12, 5, false)\n    end\n  end\nend\n\n-- pop -----------------------------------------------------------------------\n\nlocal function cellCenter(r, c)\n  return GX + (c - 1) * CELL + CELL / 2, GY + (r - 1) * CELL + CELL / 2\nend\n\nlocal function popAt(r, c)\n  local i = (r - 1) * COLS + c\n  local b = pop[i]\n  if b.popped or refillI > 0 then return end\n  b.popped = true\n  b.age = 0\n  nPop = nPop + 1\n  vupp.tone(COL_NOTES[c], 140, 0.3, "sine")\n  local x, y = cellCenter(r, c)\n  for k = 1, 4 do\n    local a = k * 1.57 + 0.6\n    sparkles[#sparkles + 1] = {\n      x = x, y = y, dx = math.cos(a) * 68, dy = math.sin(a) * 68, age = 0,\n    }\n  end\n  for k = 1, COLS * ROWS do\n    if not pop[k].popped then return end\n  end\n  refillWait = 1.1   -- grid is empty: a calm beat, then it quietly comes back\nend\n\nlocal function updatePop(dt, touch)\n  if touch and touch.y < GY + ROWS * CELL then\n    dpadActive = false\n    local c = math.floor((touch.x - GX) / CELL) + 1\n    local r = math.floor((touch.y - GY) / CELL) + 1\n    if r >= 1 and r <= ROWS and c >= 1 and c <= COLS then\n      local x, y = cellCenter(r, c)\n      local dx, dy = touch.x - x, touch.y - y\n      if dx * dx + dy * dy <= 34 * 34 then popAt(r, c) end\n    end\n  end\n  if vupp.btnp("left") then sel.c = clamp(sel.c - 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("right") then sel.c = clamp(sel.c + 1, 1, COLS); dpadActive = true end\n  if vupp.btnp("up") then sel.r = clamp(sel.r - 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("down") then sel.r = clamp(sel.r + 1, 1, ROWS); dpadActive = true end\n  if vupp.btnp("a") then\n    dpadActive = true\n    popAt(sel.r, sel.c)\n  end\n  for _, b in ipairs(pop) do\n    b.age = b.age + dt\n  end\n  if refillWait > 0 then\n    refillWait = refillWait - dt\n    if refillWait <= 0 then\n      refillI = 1\n      refillTick = 0\n    end\n  end\n  if refillI > 0 then\n    refillTick = refillTick - dt\n    if refillTick <= 0 then\n      pop[refillI] = { popped = false, age = 0 }\n      refillI = refillI + 1\n      refillTick = 0.15\n      if refillI > COLS * ROWS then refillI = 0 end\n    end\n  end\n  local i = 1\n  while i <= #sparkles do\n    local s = sparkles[i]\n    s.x = s.x + s.dx * dt\n    s.y = s.y + s.dy * dt\n    s.age = s.age + dt\n    if s.age > 0.4 then table.remove(sparkles, i) else i = i + 1 end\n  end\nend\n\nlocal function drawPop(gfx)\n  gfx.clear(1)\n  for r = 1, ROWS do\n    for c = 1, COLS do\n      local b = pop[(r - 1) * COLS + c]\n      local x, y = cellCenter(r, c)\n      x, y = math.floor(x), math.floor(y)\n      if b.popped then\n        if b.age < 0.25 then\n          gfx.circle(x, y, math.floor(28 + b.age * 80), 7, false)\n        else\n          gfx.circle(x, y, 6, 5, false)\n        end\n      else\n        local rr = 28\n        if b.age < 0.3 then rr = math.max(2, math.floor(28 * b.age / 0.3)) end\n        gfx.circle(x, y, rr, 2, true)\n        gfx.circle(x, y, rr, 12, false)\n        if rr > 16 then gfx.circle(x - 10, y - 10, 4, 15, true) end\n      end\n    end\n  end\n  if dpadActive then\n    local x, y = cellCenter(sel.r, sel.c)\n    gfx.circle(math.floor(x), math.floor(y), 34, 10, false)\n  end\n  for _, s in ipairs(sparkles) do\n    gfx.circle(math.floor(s.x), math.floor(s.y), 2, 10, true)\n  end\nend\n\n-- sky -----------------------------------------------------------------------\n\nlocal function updateSky(dt, touch)\n  local hx, hy = nil, nil\n  if touch and touch.y < 284 then\n    dpadActive = false\n    hx, hy = touch.x, touch.y\n  elseif vupp.btn("a") then\n    dpadActive = true\n    hx, hy = cx, cy\n  end\n  if hx then\n    starTick = starTick - dt\n    if starTick <= 0 then\n      if #stars >= 60 then table.remove(stars, 1) end\n      stars[#stars + 1] = {\n        x0 = hx + vupp.rand(17) - 9, y = hy, vy = -36 - vupp.rand(20),\n        ph = vupp.rand(628) / 100, age = 0,\n      }\n      nStar = nStar + 1\n      starTick = 0.08\n    end\n    airT = airT - dt\n    if airT <= 0 then\n      vupp.tone(880, 700, 0.08, "sine")\n      airT = 0.9\n    end\n  else\n    airT = 0\n  end\n  local i = 1\n  while i <= #stars do\n    local s = stars[i]\n    s.y = s.y + s.vy * dt\n    s.age = s.age + dt\n    if s.age > 3 or s.y < -8 then table.remove(stars, i) else i = i + 1 end\n  end\nend\n\nlocal function drawSky(gfx)\n  gfx.clear(0)\n  -- a soft crescent moon, always in its spot\n  gfx.circle(392, 56, 24, 6, true)\n  gfx.circle(402, 48, 22, 0, true)\n  for i, st in ipairs(STARS) do\n    local b = math.sin(t * 0.7 + st[3])\n    local col = 5\n    if b > 0.4 then col = 7 elseif b > -0.3 then col = 6 end\n    if i % 4 == 0 then\n      gfx.circle(st[1], st[2], 2, col, true)\n    else\n      gfx.rect(st[1], st[2], 2, 2, col, true)\n    end\n  end\n  for _, s in ipairs(stars) do\n    local x = math.floor(s.x0 + math.sin(t * 2 + s.ph) * 8)\n    local y = math.floor(s.y)\n    local col = 13\n    if s.age < 1 then col = 7 elseif s.age < 2 then col = 10 end\n    gfx.circle(x, y, 2, col, true)\n    if s.age < 0.5 then gfx.circle(x, y, 4, col, false) end\n  end\nend\n\n-- shared --------------------------------------------------------------------\n\nlocal function switchScene(n)\n  if n ~= scene then\n    scene = n\n    vupp.tone(494, 70, 0.12, "sine")\n  end\nend\n\nfunction vupp.update(dt)\n  t = t + dt\n  local touch = vupp.touch()\n  local newPress = touch ~= nil and not touchWasDown\n  -- the three dots: tap to switch scene (B cycles for d-pad hands)\n  if newPress and touch.y >= 284 then\n    if touch.x < 228 then switchScene(1)\n    elseif touch.x < 252 then switchScene(2)\n    else switchScene(3) end\n    touchWasDown = true\n    return\n  end\n  if vupp.btnp("b") then\n    switchScene(scene % 3 + 1)\n  end\n  -- d-pad cursor glides in pond and sky (pop moves cell by cell)\n  if scene ~= 2 then\n    local spd = 220 * dt\n    if vupp.btn("left") then cx = cx - spd; dpadActive = true end\n    if vupp.btn("right") then cx = cx + spd; dpadActive = true end\n    if vupp.btn("up") then cy = cy - spd; dpadActive = true end\n    if vupp.btn("down") then cy = cy + spd; dpadActive = true end\n    cx = clamp(cx, 16, 464)\n    cy = clamp(cy, 16, 268)\n  end\n  if scene == 1 then\n    updatePond(dt, touch, newPress)\n  elseif scene == 2 then\n    updatePop(dt, touch)\n  else\n    updateSky(dt, touch)\n  end\n  touchWasDown = touch ~= nil\n  saveTick = saveTick + dt\n  if saveTick > 30 then\n    saveCounters()   -- hard-exit safe\n    saveTick = 0\n  end\nend\n\nfunction vupp.draw(gfx)\n  if scene == 1 then\n    drawPond(gfx)\n  elseif scene == 2 then\n    drawPop(gfx)\n  else\n    drawSky(gfx)\n  end\n  if dpadActive and scene ~= 2 then\n    gfx.circle(math.floor(cx), math.floor(cy), 10, 10, false)\n    gfx.rect(math.floor(cx), math.floor(cy), 2, 2, 10, true)\n  end\n  for i = 1, 3 do\n    local x = 192 + i * 24\n    if i == scene then\n      gfx.circle(x, 302, 6, 10, true)\n    else\n      gfx.circle(x, 302, 6, 5, false)\n    end\n  end\nend\n'
       }
     },
     {
@@ -3445,12 +4511,12 @@ end
 -- Dash: handcrafted side-scrolling levels. Hold right to run, A jumps
 -- (generous coyote time + jump keeps your run speed), collect rings, reach
 -- the flag. Falling in a gap just pops you back to the last solid ground
--- with a boop \u2014 no lives, no game over.
+-- with a boop, no lives, no game over.
 -- v1.2: six levels with a gentle ramp (wider gaps, higher platforms, moving
 -- platforms), a title screen, level progress that persists, per-level ring
 -- bests, PERFECT! runs, a "you did them all!" lap celebration, and outfit
 -- colors that unlock as flag finishes add up.
--- v2.0: native 480x320 canvas (engine v14, hires) \u2014 all canvas-px values
+-- v2.0: native 480x320 canvas (engine v14, hires), all canvas-px values
 -- doubled, gameplay identical.
 -- Canvas 480x320 landscape, default PICO-8 palette (docs/07-app-library.md).
 
@@ -3486,7 +4552,7 @@ local LEVELS = {
       { x = 1080, y = 228 }, { x = 1140, y = 228 },
     },
   },
-  { -- 2: wide meadows \u2014 the gaps stretch out, no helpers over them
+  { -- 2: wide meadows, the gaps stretch out, no helpers over them
     w = 1280, flag = 1224,
     plats = {
       { x = 0, y = GROUND_Y, w = 240 },
@@ -3503,7 +4569,7 @@ local LEVELS = {
       { x = 940, y = 228 }, { x = 1090, y = 164 }, { x = 1200, y = 228 },
     },
   },
-  { -- 3: up the hills \u2014 a staircase to a high ridge and back down
+  { -- 3: up the hills, a staircase to a high ridge and back down
     w = 1280, flag = 1220,
     plats = {
       { x = 0, y = GROUND_Y, w = 220 },
@@ -3521,7 +4587,7 @@ local LEVELS = {
       { x = 928, y = 172 }, { x = 1120, y = 228 }, { x = 1200, y = 228 },
     },
   },
-  { -- 4: the ferry \u2014 a moving platform carries you over the big gap
+  { -- 4: the ferry, a moving platform carries you over the big gap
     w = 1280, flag = 1224,
     plats = {
       { x = 0, y = GROUND_Y, w = 260 },
@@ -3541,7 +4607,7 @@ local LEVELS = {
       { x = 1210, y = 228 },
     },
   },
-  { -- 5: sky steps \u2014 high stairs onto a fast little ferry
+  { -- 5: sky steps, high stairs onto a fast little ferry
     w = 1280, flag = 1220,
     plats = {
       { x = 0, y = GROUND_Y, w = 200 },
@@ -3560,7 +4626,7 @@ local LEVELS = {
       { x = 856, y = 100 }, { x = 996, y = 164 }, { x = 1176, y = 228 },
     },
   },
-  { -- 6: the grand tour \u2014 longest run: wide gap, high climb, sky ferry
+  { -- 6: the grand tour, longest run: wide gap, high climb, sky ferry
     w = 1408, flag = 1352,
     plats = {
       { x = 0, y = GROUND_Y, w = 220 },
@@ -4093,7 +5159,7 @@ end
 -- sillily; the star row builds from the lifetime words_completed count,
 -- like Shape Match's lifetime stars.
 --
--- Content: two tiers \u2014 20 three-letter words, then 22 four-letter words that
+-- Content: two tiers, 20 three-letter words, then 22 four-letter words that
 -- unlock (with a party) once words_completed reaches TIER2_AT. Distractor
 -- letters are plausible (other vowels for vowel slots, look-alike consonants
 -- like b/d/p for consonant slots). Words cycle in shuffled order through the
@@ -4177,7 +5243,7 @@ local function buildActive()
 end
 
 local function saveCycle()
-  -- order packs as one printable char per index (A=1) \u2014 a tiny store value
+  -- order packs as one printable char per index (A=1), a tiny store value
   local s = {}
   for i = 1, #order do
     s[i] = string.char(64 + order[i])
@@ -4887,7 +5953,7 @@ function vupp.draw(gfx)
       local y = 272 + math.floor(math.sin(t * 6 + i) * 16)
       drawStarShape(gfx, x, y, 24, 10)
     end
-    -- size 3 is the engine max (12px advance) \u2014 center by measure
+    -- size 3 is the engine max (12px advance), center by measure
     local wx = 240 - math.floor((#word * 12) / 2)
     gfx.text(word, wx, 200, 7, 3)
     PICS[word](gfx, 240, 96)
@@ -5612,11 +6678,12 @@ Each size is its OWN glyph set, not a scale: 4x6, 8x12, 12x18 pixels.
     size 2: advance 8px/char,  line height 12px
     size 3: advance 12px/char, line height 18px
 
-Centring: x = (160 - #str * 4 * size) / 2. Do the arithmetic; do not eyeball
-it. A 10-character string at size 2 is 80px wide, so it starts at x = 40.
+Centring: x = (480 - #str * 4 * size) / 2 on the 480x320 hires canvas, or use
+gfx.w so it is right either way. Do the arithmetic; do not eyeball it. A
+10-character string at size 3 is 120px wide, so it starts at x = 180.
 
-Anything a CHILD reads wants size 2 minimum, size 3 for early readers. Size 1
-is debug text \u2014 at 4x6 on a 3.5" panel it is genuinely unreadable to a
+Anything a CHILD reads wants size 3, with size 2 for secondary labels. Size 1
+is debug text: at 4x6 on a 3.5" panel it is genuinely unreadable to a
 five-year-old.
 
 ASCII 32..127 ONLY. Every other byte draws as a literal "?", so a star renders
@@ -5625,8 +6692,8 @@ most tempting: score badges, hearts, arrows, accented names. Draw those with
 gfx.circle / gfx.tri / gfx.rect.
 
 Text placement is the single most common thing a playtest screenshot catches:
-a score drawn at y=0 sits under nothing, but a score drawn at x=140 runs off
-the 160px canvas and simply vanishes mid-word.
+a score drawn at y=0 sits under nothing, but a score drawn at x=440 runs off
+the 480px canvas and simply vanishes mid-word.
 `,
   palette: `
 # Choosing a palette
@@ -5645,7 +6712,7 @@ made from one that looks default, and it costs nothing but JSON:
     "palette": ["#0d1b2a", "#1b263b", "#415a77", ..., "#ffd166"]
 
 How to build one that works:
-  - Index 0 is the world \u2014 gfx.clear(0) is the sky, the water, the room. Pick
+  - Index 0 is the world: gfx.clear(0) is the sky, the water, the room. Pick
     it first and deliberately.
   - A few darks for outlines and shadow, a mid range for surfaces, two or
     three bright accents reserved for the thing the child is meant to look at.
@@ -5653,7 +6720,7 @@ How to build one that works:
     them read as important.
   - 20-40 entries is plenty; the engine allows more but you will not use them.
 
-Never index past the end of your own array \u2014 that draws NOTHING AT ALL, no
+Never index past the end of your own array. That draws NOTHING AT ALL, no
 error, which reads as "my game is broken" and is invisible in the logs. It is
 one of the few bugs a screenshot catches instantly.
 `,
@@ -5662,7 +6729,7 @@ one of the few bugs a screenshot catches instantly.
 
 The rule the whole product hangs on: something must move and respond on the
 very first frame, before any input. A still screen reads as broken to a
-five-year-old \u2014 they will not press anything to find out.
+five-year-old, who will not press anything to find out.
 
 Cheap motion that always works:
   - A bob: y = base + 3 * math.sin(t * 2)
@@ -5689,7 +6756,7 @@ falls in with a funny plop and hops straight back on.
     vupp.store.get(key, default)
 
 Survives closing the app. Use it for a high score or the furthest level. Keep
-it small \u2014 this is a save file, not a database. It also survives an edit, so
+it small: this is a save file, not a database. It also survives an edit, so
 if you are testing a "best score" the old one is still there; that is what the
 creator's "start over" button clears.
 
@@ -5697,11 +6764,111 @@ creator's "start over" button clears.
     vupp.rand(n)   -- integer 1..n; no args gives a float in [0,1)
 
 vupp.rand is seeded per run, so a bug you hit reproduces on the next launch.
-math.random works but does not have that property \u2014 prefer vupp.rand.
+math.random works but does not have that property, prefer vupp.rand.
 
     vupp.emit(name, payload)  -- a note for the parent's activity feed
 
 Emit at genuine milestones ("finished_level", "spelled_word"), not per frame.
+`,
+  blocks: `
+# Building a block world (no art files needed)
+
+The engine has a real voxel renderer (engine v17), and it needs NO asset files
+at all: the grid is a byte per cell in PSRAM, and the mesher and rasteriser are
+both in C. This is the cheapest way to make something that looks 3D. Read
+\`blockworld\` in the reference apps for a complete one.
+
+    gfx.vworld{ w = 64, d = 64, h = 32, chunk = 16 }   -- once, on frame one
+    gfx.vblock(id, top, side, bottom)   -- palette index per face
+    gfx.vpattern(id, accent, mask)      -- optional 4x4 texture, 16 bits
+    gfx.vfill(x0,y0,z0, x1,y1,z1, block)
+    gfx.vterrain(heights, top, sub, deep [, subdepth])
+    gfx.vset(x,y,z, block)  gfx.vget(x,y,z)
+    gfx.vray(x,y,z, dx,dy,dz [, maxd]) -> hx,hy,hz, px,py,pz | nil
+    gfx.vbox(x, y, z, sx, sy, sz, block)   -- a moving thing (the player)
+    gfx.vlod(dist)                          -- how far textures still draw
+    gfx.vsave(name)  gfx.vload(name)        -- survives a reinstall
+    gfx.vdraw()                             -- rasterise, using gfx.mcam
+
+Rules that matter:
+
+  - w and d must be multiples of chunk. One world per app run.
+  - Block 0 is air. Give every other id a colour with gfx.vblock BEFORE
+    filling, or the world draws in whatever the defaults are.
+  - Never fill the world with a Lua triple loop. Even a small world blows the
+    3-million-instruction budget for one callback and the app is killed. Do the
+    noise in Lua, then hand C one string: gfx.vterrain takes w*d height bytes
+    row-major and extrudes the whole landscape in a single call.
+  - gfx.vdraw uses the camera from gfx.mcam, so set that first. It writes no
+    depth buffer, so anything drawn afterwards is on top: HUD, crosshair, text.
+  - A moving thing cannot be a grid cell. Use gfx.vbox, which the voxel pass
+    orders against the world.
+
+THE ONE THAT CATCHES EVERYBODY: \`gfx\` is the ARGUMENT to vupp.draw. It is not
+a global, and it does not exist in vupp.init. Calling gfx.vworld from init
+fails instantly with "attempt to index a nil value (global 'gfx')". So build
+the world on the first frame instead:
+
+    local built = false
+
+    local function build(gfx)
+      gfx.vworld{ w = 64, d = 64, h = 32, chunk = 16 }
+      gfx.vblock(1, 11, 3, 4)          -- grass: green top, dark sides
+      gfx.vblock(2, 4, 4, 4)           -- dirt
+      gfx.vfill(0, 0, 0, 63, 63, 5, 2) -- rock up to z=5
+      gfx.vfill(0, 0, 6, 63, 63, 6, 1) -- one grass layer on top
+    end
+
+    function vupp.draw(gfx)
+      if not built then build(gfx); built = true end
+      gfx.clear(12)
+      gfx.mcam{ x = cx, y = cy, z = cz, yaw = yaw, pitch = pitch,
+                focal = 260, cx = 240, cy = 160 }
+      gfx.vdraw()
+    end
+
+vupp.init still does everything that does NOT touch gfx: reading the store,
+setting up your own tables. \`blockworld\` is written exactly this way.
+`,
+  meshes: `
+# 3D models without an asset pipeline
+
+gfx.mload has two forms. The string form reads a .vmesh file, which you cannot
+produce here. The TABLE form builds the same mesh out of Lua and needs no file:
+
+    local slot = gfx.mload{
+      verts = { {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0} },
+      faces = { {1,2,3,4, col = 11, nx = 0, ny = 0, nz = 1} },  -- 1-based
+    }
+
+Faces are triangles or quads (a fourth index makes it a quad). \`col\` is a
+palette index; nx/ny/nz is the face normal, which the engine uses for lighting.
+An optional \`parts\` table names ranges of faces so gfx.mpose can swing them:
+that is how a character walks without a skeleton.
+
+    gfx.mcam{ x=, y=, z=, yaw=, pitch=, focal=, tier=32, depth=, ztest= }
+    gfx.mesh(slot, x, y, z [, yaw [, scale [, pitch [, roll [, tier [, col]]]]]])
+    gfx.mpose(slot, part, yaw [, pitch [, dx, dy, dz]])
+    gfx.munload(slot)   gfx.zclear()
+
+Why this and not gfx.tri: a Lua->C call costs about 125 microseconds on the
+device whatever it draws, so a polygon renderer written in Lua tops out near
+100-150 faces a frame. gfx.mesh is ONE call for a whole model and costs about
+2.6 microseconds per face after that. 16 slots exist.
+
+\`gfx\` is the ARGUMENT to vupp.draw, not a global, so gfx.mload cannot be
+called from vupp.init: that fails with "attempt to index a nil value (global
+'gfx')". Build the vertex/face TABLES in init, and upload them on frame one:
+
+    local slot, built = nil, false
+
+    function vupp.draw(gfx)
+      if not built then slot = gfx.mload(MODEL); built = true end
+      gfx.clear(12)
+      gfx.zclear()          -- no ground pass, so reset depth yourself
+      gfx.mcam{ x = 0, y = -6, z = 3, focal = 260, cx = 240, cy = 160 }
+      gfx.mesh(slot, 0, 0, 0, yaw)
+    end
 `,
   budget: `
 # Staying inside the device
@@ -5716,7 +6883,7 @@ CRASH, not a slowdown.
     mutate them. This is the number one cause of a game that runs fine for
     thirty seconds and then stutters.
   - Never write "while true do" without a bounded exit.
-  - Target 30 fps. Keep total Lua under ~1500 lines \u2014 small and finished beats
+  - Target 30 fps. Keep total Lua under ~1500 lines, small and finished beats
     big and broken.
 
 A concrete one that catches people: building a display string every frame
@@ -5733,13 +6900,13 @@ var ENGINE_API = `
 # The Vupp engine
 
 An app is Lua 5.4 files plus a manifest. The device runs ONE app at a time in a
-fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel \u2014 every
+fresh VM. The canvas is 480x320 (landscape), presented 1:1 to the panel, every
 coordinate you write is in 0..479 x 0..319, and every canvas pixel is a real
-panel pixel. (Declared by "hires": true in app.json \u2014 always include it; without
+panel pixel. (Declared by "hires": true in app.json, always include it; without
 it the app gets the legacy 240x160 pixel-doubled canvas and every coordinate
 below would be wrong by 2x.)
 
-## Lifecycle \u2014 define these as globals on the pre-existing \`vupp\` table
+## Lifecycle: define these as globals on the pre-existing \`vupp\` table
 
     function vupp.init()        -- once, before the first frame
     function vupp.update(dt)    -- every frame; dt is seconds since the last one
@@ -5751,12 +6918,12 @@ below would be wrong by 2x.)
     vupp.btn(b)   -- held right now?
     vupp.btnp(b)  -- pressed on THIS frame? (use for jumps, menu moves, firing)
     b is one of: "up" "down" "left" "right" "a" "b" "select"
-    "start" NEVER reaches the app \u2014 the engine owns it for the pause menu.
+    "start" NEVER reaches the app. The engine owns it for the pause menu.
 
     vupp.touch()  -- nil, or {x=, y=, held=} in canvas coordinates.
                   -- ONLY works if app.json capabilities includes "touch".
 
-## Drawing \u2014 all on the gfx passed to vupp.draw
+## Drawing: all on the gfx passed to vupp.draw
 
     gfx.clear(color)
     gfx.rect(x, y, w, h, color [, filled])      -- filled defaults to false
@@ -5773,15 +6940,21 @@ below would be wrong by 2x.)
 
   ASCII 32..127 ONLY. The font has no other glyphs and draws a literal "?" for
   every byte outside that range, so a star, an arrow, an accent or an emoji
-  comes out as visible garbage \u2014 "\u2605 70" renders as "?70?" because the star is
+  comes out as visible garbage, "\u2605 70" renders as "?70?" because the star is
   three bytes. This is easy to forget when reaching for a score badge or a
   heart. Draw those with gfx.circle / gfx.tri / gfx.rect instead.
 
-  There are more calls (gfx.sprite, gfx.image, gfx.texcol, gfx.terrain,
-  gfx.floor, gfx.ssprite, gfx.mesh, ...) but they all need asset files, which
-  this studio cannot produce yet. Draw with the shape and text calls above.
-  That is not a handicap: many of the best apps in the Vupp library are shapes
-  only.
+  Some calls DO need asset files you cannot produce here, and they draw
+  nothing rather than failing: gfx.sprite, gfx.image, gfx.ssprite, gfx.texcol,
+  gfx.tload, gfx.terrain, gfx.floor.
+
+  But two whole 3D engines need no files at all, and both are worth reaching
+  for when the idea is spatial rather than flat:
+    - BLOCK WORLDS: gfx.vworld / gfx.vfill / gfx.vterrain / gfx.vdraw and the
+      rest of gfx.v*. A byte-per-cell grid, meshed and drawn in C.
+    - MESHES: gfx.mload with a model TABLE (not a filename), then gfx.mcam
+      and gfx.mesh. One call draws a whole model.
+  Read the "blocks" and "meshes" reference topics before using either.
 
 ## Colors
 
@@ -5797,13 +6970,13 @@ Colors are PALETTE INDICES (integers), not hex. The default 16-color palette:
 
       "palette": ["#0f1020", "#1d2b53", "#7e2553", ..., "#ffccaa"]
 
-  Index 0 is the one to choose deliberately \u2014 gfx.clear(0) is the sky, the
+  Index 0 is the one to choose deliberately, gfx.clear(0) is the sky, the
   water, the room the game happens in. A hand-picked palette of 20-40 colors is
   the single biggest thing separating a game that looks made from one that
   looks default, and it costs nothing but JSON. Pick shades that go together:
   a few darks for outlines, a mid range for surfaces, two or three bright
   accents for the thing the child is meant to look at. Never index past the end
-  of your own array \u2014 that draws nothing at all.
+  of your own array: that draws nothing at all.
 
 ## Sound
 
@@ -5811,7 +6984,7 @@ Colors are PALETTE INDICES (integers), not hex. The default 16-color palette:
       freq 20..8000 Hz, ms 1..5000, vol 0..1,
       wave "tri" (default, soft) | "sine" | "square" | "saw" | "noise"
 
-  Sound is how a game feels alive \u2014 a blip on every input, a rising pair of
+  Sound is how a game feels alive: a blip on every input, a rising pair of
   tones on success, a soft low tone on a miss. Use it. (vupp.sfx needs asset
   files, so it is unavailable here.)
 
@@ -5839,8 +7012,17 @@ these produces a crash, not a warning. There is no fallback and no polyfill.
     require, dofile, loadfile, load, collectgarbage
     os.* (os.time, os.clock, os.date), io.*, package.*, debug.*, coroutine.*
     love.*, cls(), pset(), spr(), flr(), rnd(), print(x, y, c), btn(0)
-    gfx.print, gfx.pixel, gfx.blit, gfx.font, gfx.sprite, gfx.image
-    vupp.key, vupp.mouse, vupp.btn("start")
+    gfx.print, gfx.pixel, gfx.blit, gfx.font
+    vupp.key, vupp.mouse
+
+  REAL, but useless here: gfx.sprite, gfx.image, gfx.ssprite, gfx.texcol,
+  gfx.tload, gfx.terrain, gfx.floor, vupp.sfx, vupp.ambience. They exist on the
+  device and do not raise. They read art or audio files this toolchain cannot
+  produce, so with no such file they draw nothing and return false. That is
+  worse than a crash, because the app runs and the screen stays empty.
+
+  vupp.btn("start") is real and always false: the engine owns START for the
+  pause menu, so it never reaches an app.
 
   USE INSTEAD:
     os.time()      -> vupp.time()
@@ -5849,7 +7031,7 @@ these produces a crash, not a warning. There is no fallback and no polyfill.
     rnd(n)         -> vupp.rand(n)
 
   math, string, table and utf8 ARE available in full. math.random works, but
-  prefer vupp.rand \u2014 it is seeded per run so bugs reproduce.
+  prefer vupp.rand, which is seeded per run so bugs reproduce.
 `.trim();
 var BUDGETS = `
 # Hard limits (the device is a small microcontroller, not a phone)
@@ -5857,7 +7039,7 @@ var BUDGETS = `
   - Each of init/update/draw must finish in 250 ms wall clock and ~3 million
     Lua instructions. Blowing either is a crash, not a slowdown.
   - 2 MB of Lua heap for everything.
-  - Target 30 fps. Do NOT allocate inside vupp.draw \u2014 no table constructors,
+  - Target 30 fps. Do NOT allocate inside vupp.draw, no table constructors,
     no string concatenation, no closures per frame. Build tables once in
     vupp.init and mutate them.
   - Never write "while true do" without a bounded exit.
@@ -5882,8 +7064,8 @@ var MANIFEST = `
 
   Rules: keep "slug" exactly "draft" (the preview device installs it under that
   name). "category" is one of game | creative | music | learning. Add "touch"
-  to "capabilities" ONLY if you call vupp.touch() \u2014 and if you do, make the
-  touch targets big, at least 80x80 canvas pixels. Keep "hires": true \u2014 it is
+  to "capabilities" ONLY if you call vupp.touch(), and if you do, make the
+  touch targets big, at least 80x80 canvas pixels. Keep "hires": true, which is
   what puts the app on the full-resolution canvas. "palette" is optional; omit
   it for the built-in 16, or list your own and use indices 0..n-1. Bump
   "version" whenever you change the app. Leave "parent" exactly as shown unless
@@ -5913,6 +7095,2280 @@ var SKELETON = `
     end
 `.trim();
 
+// ../app-reference/src/engine-api.json
+var engine_api_default = {
+  engineVersion: 17,
+  source: "firmware/vupp/components/apprt/vupp_apprt_api.c",
+  calls: [
+    {
+      name: "gfx.circle",
+      namespace: "gfx",
+      short: "circle",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.circle(x, y, r, color [, filled])"
+        }
+      ],
+      prose: "(x,y) is the CENTRE, not a corner\nlike gfx.rect. `filled` defaults to false. A negative radius draws nothing;\na float radius is floored, so a sin()-driven pulse is safe.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "r",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "filled",
+          index: 5,
+          optional: true,
+          default: "false"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 150
+    },
+    {
+      name: "gfx.clear",
+      namespace: "gfx",
+      short: "clear",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.clear(color)"
+        }
+      ],
+      prose: "Fill the whole canvas with one palette index, and mark\nthe shared depth buffer for reset. Nearly every draw starts here; without\nit the previous frame shows through wherever this one draws nothing.\nIndex 0 is the one to choose deliberately: it is the sky, the water, the\nroom the game happens in.",
+      params: [
+        {
+          name: "color",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 122
+    },
+    {
+      name: "gfx.floor",
+      namespace: "gfx",
+      short: "floor",
+      group: "Heightfield terrain",
+      signatures: [
+        {
+          text: "gfx.floor(cfg)",
+          returns: "bool"
+        }
+      ],
+      prose: "Mode-7 textured ground plane (engine v6): sweeps\nthe loaded terrain colormap per scanline. cfg: x, y, z, yaw, horizon, vy,\nvh, focal, dist, fog1, fog2, tscale, sky, far. Fills the same depth\nbuffer gfx.ssprite z-tests against. false = nothing loaded.",
+      params: [
+        {
+          name: "cfg",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [
+        {
+          name: "x",
+          default: "0.0"
+        },
+        {
+          name: "y",
+          default: "0.0"
+        },
+        {
+          name: "z",
+          default: "12.0"
+        },
+        {
+          name: "yaw",
+          default: "0.0"
+        },
+        {
+          name: "horizon",
+          default: "46.0"
+        },
+        {
+          name: "vy",
+          default: "0.0"
+        },
+        {
+          name: "vh",
+          default: "200.0"
+        },
+        {
+          name: "focal",
+          default: "110.0"
+        },
+        {
+          name: "dist",
+          default: "90.0"
+        },
+        {
+          name: "fog1",
+          default: "35.0"
+        },
+        {
+          name: "fog2",
+          default: "60.0"
+        },
+        {
+          name: "tscale",
+          default: "2.0"
+        },
+        {
+          name: "sky",
+          default: "12.0"
+        },
+        {
+          name: "far",
+          default: "12.0"
+        },
+        {
+          name: "depth",
+          default: "true"
+        }
+      ],
+      since: 6,
+      needsAssets: false,
+      stub: false,
+      line: 301
+    },
+    {
+      name: "gfx.image",
+      namespace: "gfx",
+      short: "image",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: "gfx.image(name [, x, y [, scale]])",
+          returns: "bool"
+        }
+      ],
+      prose: "Draw assets/images/{name}.vsp\n(a scene or background; engine v2). false when the image is missing.\nInteger scale (engine v14, 1..4) draws it nearest-neighbour scaled, the\nnative-canvas path for backgrounds authored against the classic canvas.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false,
+          constraint: "image name only (no path, no extension)"
+        },
+        {
+          name: "x",
+          index: 2,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "y",
+          index: 3,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "scale",
+          index: 4,
+          optional: true,
+          default: "1"
+        }
+      ],
+      fields: [],
+      since: 2,
+      needsAssets: true,
+      stub: false,
+      line: 204
+    },
+    {
+      name: "gfx.line",
+      namespace: "gfx",
+      short: "line",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.line(x1, y1, x2, y2, color)"
+        }
+      ],
+      prose: "Bresenham, inclusive endpoints, clipped\nper pixel, so coordinates off the canvas are safe rather than fatal.",
+      params: [
+        {
+          name: "x1",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y1",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "x2",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "y2",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 5,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 140
+    },
+    {
+      name: "gfx.map",
+      namespace: "gfx",
+      short: "map",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: "gfx.map(cel_x, cel_y, ...)"
+        }
+      ],
+      prose: "NOT IMPLEMENTED. A no-op that logs once per\napp run. Tilemaps were deferred because sprite loops cover what v1 apps\nneed; the entry stays registered so an app that reaches for it gets nothing\ndrawn rather than a nil-index crash.",
+      params: [],
+      fields: [],
+      needsAssets: false,
+      stub: true,
+      line: 257
+    },
+    {
+      name: "gfx.mcam",
+      namespace: "gfx",
+      short: "mcam",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.mcam(cfg)"
+        }
+      ],
+      prose: "Camera for every gfx.mesh (and gfx.vdraw) until the next\ncall. cfg:\n  x, y, z, yaw, pitch  = where the camera is and where it looks\n  focal                = pixels per world unit at distance 1\n  cx, cy               = projection centre, usually the canvas centre\n  tier                 = palette step C adds per lighting tier\n                         (stomp's +32/+64 convention, so 32)\n  lx, ly, lz           = light direction, normalised\n  fog1, fog2           = distance fog (engine v12): a face past fog1 drops\n                         one lighting tier, past fog2 two. The SAME two\n                         bands gfx.terrain and gfx.floor fade the ground\n                         through, so a model recedes into the haze with the\n                         world behind it instead of reading as a sticker.\n                         0 = off.\n  depth                = false skips the per-pixel depth test and fills\n                         spans with memset. The test costs 2 PSRAM reads +\n                         2 writes per pixel and buys nothing over a FLAT\n                         ground, so an app that sorts its models far-to-near\n                         should turn it off (~4 ms/frame in Pet Parade).\n  ztest                = false (engine v16) still WRITES depth but skips the\n                         compare: half the PSRAM traffic, for ground layers\n                         the app painter-orders itself. Things that\n                         interpenetrate, such as props and the player, keep it.",
+      params: [
+        {
+          name: "cfg",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [
+        {
+          name: "x",
+          default: "0.0"
+        },
+        {
+          name: "y",
+          default: "0.0"
+        },
+        {
+          name: "z",
+          default: "3.0"
+        },
+        {
+          name: "yaw",
+          default: "0.0"
+        },
+        {
+          name: "pitch",
+          default: "0.0"
+        },
+        {
+          name: "focal",
+          default: "110.0"
+        },
+        {
+          name: "cx",
+          default: "120.0"
+        },
+        {
+          name: "cy",
+          default: "80.0"
+        },
+        {
+          name: "tier",
+          default: "32.0"
+        },
+        {
+          name: "lx",
+          default: "-0.32"
+        },
+        {
+          name: "ly",
+          default: "-0.24"
+        },
+        {
+          name: "lz",
+          default: "0.92"
+        },
+        {
+          name: "fog1",
+          default: "0.0"
+        },
+        {
+          name: "fog2",
+          default: "0.0"
+        },
+        {
+          name: "depth",
+          default: "true"
+        },
+        {
+          name: "ztest",
+          default: "true"
+        }
+      ],
+      since: 12,
+      needsAssets: false,
+      stub: false,
+      line: 616
+    },
+    {
+      name: "gfx.mesh",
+      namespace: "gfx",
+      short: "mesh",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.mesh(slot, x, y, z [, yaw [, scale [, pitch [, roll [, tier [, col [, smap [, zbias]]]]]]]])",
+          returns: "faces drawn"
+        }
+      ],
+      prose: "One call draws the whole model: transform, near-clip,\nbackface cull, directional lighting and a z-buffered span fill against the\nsame depth buffer gfx.terrain / gfx.floor write, so meshes occlude the\nground and each other with no sorting and no popping.\n\nroll spins the model about its own forward axis, because yaw and pitch\ntogether cannot express a barrel roll. tier defaults to -1 = light it; tier >= 0\nforces one lighting tier (flat/emissive). col >= 0 overrides every face\ncolour.\n\nsmap (engine v16) > 0 draws the mesh THROUGH that gfx.shademap level,\nremapping the framebuffer pixels it covers rather than replacing them,\nwhich is how real translucent shadows and tints are drawn. zbias (engine v16, world units) is a\ndepth priority: the mesh wins the z-fight against coplanar-ish layers below\nit, which is what water over terrain and decals on ground need. Affine\ndepth interpolation makes big flat layers fight, and tessellating them\nalone does not fully fix it.",
+      params: [
+        {
+          name: "slot",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "x",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "z",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "yaw",
+          index: 5,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "scale",
+          index: 6,
+          optional: true,
+          default: "1"
+        },
+        {
+          name: "pitch",
+          index: 7,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "roll",
+          index: 8,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "tier",
+          index: 9,
+          optional: true,
+          default: "-1"
+        },
+        {
+          name: "col",
+          index: 10,
+          optional: true,
+          default: "-1"
+        },
+        {
+          name: "smap",
+          index: 11,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "zbias",
+          index: 12,
+          optional: true,
+          default: "0"
+        }
+      ],
+      fields: [],
+      since: 16,
+      needsAssets: false,
+      stub: false,
+      line: 674
+    },
+    {
+      name: "gfx.mload",
+      namespace: "gfx",
+      short: "mload",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.mload(model)",
+          returns: "slot | nil"
+        },
+        {
+          text: 'gfx.mload("name")',
+          returns: "slot | nil"
+        }
+      ],
+      prose: `Upload a model table (the shape each
+tools/assets gen.py emits, and stomp's lib/models.lua hand-builds):
+  verts = {{x,y,z}, ...}
+  faces = {{a,b,c[,d], col=, nx=, ny=, nz=}, ...}   -- 1-based, d = quad
+  parts = { name = {first_face, last_face, px,py,pz}, ... }  -- optional
+Geometry is copied into native arrays, so the Lua tables can be dropped
+afterwards. Call in vupp.init: it allocates, and the frame budget is real.
+
+Engine v16: load assets/models/
+{name}.vmesh straight into the mesh slot, touching zero Lua heap. Model
+tables of this size are ~15x their binary weight as Lua objects AND
+vupp.import pins whatever it returns for the life of the app, so a
+two-thousand-face model as a lib table is a memory bug, not a style
+choice. Format (little-endian, the tools/assets gen scripts emit it):
+  "VMSH" u8 ver=1, u8 pad, u16 nv, u16 nf,
+  nv * 3*f32 xyz,
+  nf * { u16 a,b,c,d (0-based, d=0xFFFF triangle); u8 col; i8 nx,ny,nz }
+No parts (rigid models); use the table form when a model needs mpose.`,
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false,
+          constraint: "model.faces: 1..8192 faces"
+        }
+      ],
+      fields: [],
+      since: 16,
+      needsAssets: true,
+      stub: false,
+      line: 510
+    },
+    {
+      name: "gfx.mpose",
+      namespace: "gfx",
+      short: "mpose",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.mpose(slot, part, yaw [, pitch [, dx, dy, dz]])"
+        }
+      ],
+      prose: "Pose one part about\nits own pivot, sticky until changed. Parts are 1-based in the order\nmodel.parts iterated at load. This is how a character walks without a\nskeleton: swing the leg parts, bob the body.",
+      params: [
+        {
+          name: "slot",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "part",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "yaw",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "pitch",
+          index: 4,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "dx",
+          index: 5,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "dy",
+          index: 6,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "dz",
+          index: 7,
+          optional: true,
+          default: "0"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 644
+    },
+    {
+      name: "gfx.munload",
+      namespace: "gfx",
+      short: "munload",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.munload(slot)",
+          returns: "bool"
+        }
+      ],
+      prose: "Free one mesh slot (engine v15). Lets a\nscreen-based app swap model sets inside the 16-slot budget; unloading a\nslot mid-frame that a queued gfx.mesh still references is the app's bug.",
+      params: [
+        {
+          name: "slot",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      since: 15,
+      needsAssets: false,
+      stub: false,
+      line: 424
+    },
+    {
+      name: "gfx.rect",
+      namespace: "gfx",
+      short: "rect",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.rect(x, y, w, h, color [, filled])"
+        }
+      ],
+      prose: "(x,y) is the top-left corner.\n`filled` defaults to FALSE, so the plain five-argument call draws an\noutline; this is the most common surprise in a first app.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "w",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "h",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "filled",
+          index: 6,
+          optional: true,
+          default: "false"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 131
+    },
+    {
+      name: "gfx.shademap",
+      namespace: "gfx",
+      short: "shademap",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: "gfx.shademap(level, t)"
+        }
+      ],
+      prose: "Register the palette remap texcol applies at\n`shade` level 1..7 (0 = no shade): t[i+1] is the index drawn for source\nindex i. Missing entries keep the identity mapping. Don't map to 255,\ntransparency is decided before the remap.",
+      params: [
+        {
+          name: "level",
+          index: 1,
+          optional: false,
+          constraint: "shade level 1..7"
+        },
+        {
+          name: "t",
+          index: 2,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 237
+    },
+    {
+      name: "gfx.sprite",
+      namespace: "gfx",
+      short: "sprite",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: 'gfx.sprite(id, x, y [, flip "x"|"y"|"xy" [, scale]])'
+        }
+      ],
+      prose: "A cell of\nassets/sprites.vsp (engine v2, docs/07). No-op when the app ships no sheet.\nInteger scale (engine v14) draws the cell scale x bigger, the native-canvas\npath for classic-authored art; routed through the ssprite scaler.",
+      params: [
+        {
+          name: "id",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "x",
+          index: 2,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "y",
+          index: 3,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "flip",
+          index: 4,
+          optional: true,
+          default: '""'
+        },
+        {
+          name: "scale",
+          index: 5,
+          optional: true,
+          default: "1"
+        }
+      ],
+      fields: [],
+      since: 2,
+      needsAssets: true,
+      stub: false,
+      line: 183
+    },
+    {
+      name: "gfx.ssprite",
+      namespace: "gfx",
+      short: "ssprite",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: "gfx.ssprite(cell, x, y, w, h [, flip [, shade [, depth]]])"
+        }
+      ],
+      prose: 'Sheet cell\nscaled to w x h. depth (world units) z-tests per pixel against the last\ngfx.terrain pass so billboards hide behind hills; omit for HUD and the\nplayer character. flip like gfx.sprite ("x"|"y"|"xy").',
+      params: [
+        {
+          name: "cell",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "x",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "w",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "h",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "flip",
+          index: 6,
+          optional: true,
+          default: '""'
+        },
+        {
+          name: "shade",
+          index: 7,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "depth",
+          index: 8,
+          optional: true
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 383
+    },
+    {
+      name: "gfx.terrain",
+      namespace: "gfx",
+      short: "terrain",
+      group: "Heightfield terrain",
+      signatures: [
+        {
+          text: "gfx.terrain(cfg)",
+          returns: "bool"
+        }
+      ],
+      prose: "Render the loaded heightfield (engine v4). cfg:\nx, y, z, yaw (required-ish; default 0), horizon, vy, vh, focal, dist,\nfog1, fog2 (shademap levels 2/3 distance bands), water, wcolor, sky, colw.\nFills the per-pixel depth buffer ssprite z-tests against. false = no\nterrain loaded (parallels gfx.image).",
+      params: [
+        {
+          name: "cfg",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [
+        {
+          name: "x",
+          default: "0.0"
+        },
+        {
+          name: "y",
+          default: "0.0"
+        },
+        {
+          name: "z",
+          default: "10.0"
+        },
+        {
+          name: "yaw",
+          default: "0.0"
+        },
+        {
+          name: "horizon",
+          default: "64.0"
+        },
+        {
+          name: "vy",
+          default: "0.0"
+        },
+        {
+          name: "vh",
+          default: "168.0"
+        },
+        {
+          name: "focal",
+          default: "92.0"
+        },
+        {
+          name: "dist",
+          default: "64.0"
+        },
+        {
+          name: "fog1",
+          default: "22.0"
+        },
+        {
+          name: "fog2",
+          default: "44.0"
+        },
+        {
+          name: "water",
+          default: "-1.0"
+        },
+        {
+          name: "sky",
+          default: "12.0"
+        },
+        {
+          name: "wcolor",
+          default: "12.0"
+        },
+        {
+          name: "colw",
+          default: "1.0"
+        },
+        {
+          name: "depth",
+          default: "true"
+        }
+      ],
+      since: 4,
+      needsAssets: false,
+      stub: false,
+      line: 344
+    },
+    {
+      name: "gfx.texcol",
+      namespace: "gfx",
+      short: "texcol",
+      group: "Sprites and images",
+      signatures: [
+        {
+          text: "gfx.texcol(x, yTop, h, cell, tx [, shade [, w]])"
+        }
+      ],
+      prose: "One textured vertical\ncolumn: texel column tx of sheet cell `cell`, scaled to h on-screen pixels\nstarting at yTop (engine v3). Transparent texels skip, so billboards draw\ncolumn-by-column. No-op when the app ships no sheet, like gfx.sprite.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "yTop",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "h",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "cell",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "tx",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "shade",
+          index: 6,
+          optional: true,
+          default: "0"
+        },
+        {
+          name: "w",
+          index: 7,
+          optional: true,
+          default: "1"
+        }
+      ],
+      fields: [],
+      since: 3,
+      needsAssets: false,
+      stub: false,
+      line: 219
+    },
+    {
+      name: "gfx.text",
+      namespace: "gfx",
+      short: "text",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.text(str, x, y, color [, size])"
+        }
+      ],
+      prose: 'Size 1, 2 or 3 (default 1), and each\nsize is its OWN glyph set rather than a scale: 4x6, 8x12 and 12x18 cells,\nso big text is drawn at its own resolution instead of upscaled. Advance is\nalways 4*size px per character and line height 6*size px, so centre with\nx = (gfx.w - #str * 4 * size) / 2. Do the arithmetic, do not eyeball it.\n"\\n" starts a new line.\n\nASCII 32..127 ONLY. Every other byte draws a literal "?", which bites\nhardest exactly where it is most tempting: a star, an arrow, a heart or an\naccented name in a score badge. "\u2605 70" renders as "?70?" because the star\nis three bytes. Draw those with gfx.circle / gfx.tri / gfx.rect.\n\nAnything a CHILD reads wants size 3 (size 2 for secondary labels); size 1\nis a 4x6 glyph, genuinely unreadable to a five-year-old, and exists for\ndebug text. Size 3 needs engine v8 and clamps to 2 below that.',
+      params: [
+        {
+          name: "str",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "x",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "size",
+          index: 5,
+          optional: true,
+          default: "1"
+        }
+      ],
+      fields: [],
+      since: 8,
+      needsAssets: false,
+      stub: false,
+      line: 172
+    },
+    {
+      name: "gfx.theight",
+      namespace: "gfx",
+      short: "theight",
+      group: "Heightfield terrain",
+      signatures: [
+        {
+          text: "gfx.theight(x, y)",
+          returns: "number"
+        }
+      ],
+      prose: "Bilinear terrain height in world units\n(movement, camera, billboard feet). 0 when no terrain is loaded.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 372
+    },
+    {
+      name: "gfx.tload",
+      namespace: "gfx",
+      short: "tload",
+      group: "Heightfield terrain",
+      signatures: [
+        {
+          text: "gfx.tload(name [, hscale])",
+          returns: "bool"
+        }
+      ],
+      prose: "Load assets/terrain/{name}_h.vsp +\n{name}_c.vsp (square power-of-two planes) into the terrain slot. hscale\nconverts height bytes to world units (default 0.1). One slot per app run.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false,
+          constraint: "terrain name only (no path, no extension)"
+        },
+        {
+          name: "hscale",
+          index: 2,
+          optional: true
+        }
+      ],
+      fields: [],
+      needsAssets: true,
+      stub: false,
+      line: 329
+    },
+    {
+      name: "gfx.tri",
+      namespace: "gfx",
+      short: "tri",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.tri(x0,y0,x1,y1,x2,y2,color)"
+        }
+      ],
+      prose: "flat-shaded triangle (engine v5), any\nwinding, clipped. Lighting = the app picking a darker palette tier.",
+      params: [
+        {
+          name: "x0",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y0",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "x1",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "y1",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "x2",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "y2",
+          index: 6,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 7,
+          optional: false
+        }
+      ],
+      fields: [],
+      since: 5,
+      needsAssets: false,
+      stub: false,
+      line: 290
+    },
+    {
+      name: "gfx.vblock",
+      namespace: "gfx",
+      short: "vblock",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vblock(id, top, side, bottom)"
+        }
+      ],
+      prose: "Palette indices per face. The renderer\nadds the lighting tier (gfx.mcam{tier=}) per face direction, so give it the\nBASE colour and let the tiers live at +tier / +2*tier as everywhere else.",
+      params: [
+        {
+          name: "id",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "top",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "side",
+          index: 3,
+          optional: true,
+          default: "same as top"
+        },
+        {
+          name: "bottom",
+          index: 4,
+          optional: true,
+          default: "same as side"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 750
+    },
+    {
+      name: "gfx.vbox",
+      namespace: "gfx",
+      short: "vbox",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vbox(x, y, z, sx, sy, sz, block)"
+        }
+      ],
+      prose: "Draw one axis-aligned box this frame,\nordered against the world. This is how a third-person character (or, later,\na mob) exists: it cannot be a grid cell because it moves, and it cannot be a\ngfx.mesh because the voxel pass owns the span buffer and keeps no depth\nbuffer for a later pass to test against. (x,y) is the centre, z the base.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "z",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "sx",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "sy",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "sz",
+          index: 6,
+          optional: false
+        },
+        {
+          name: "block",
+          index: 7,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 773
+    },
+    {
+      name: "gfx.vdraw",
+      namespace: "gfx",
+      short: "vdraw",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vdraw()",
+          returns: "quads drawn"
+        }
+      ],
+      prose: "Remeshes dirty chunks, then rasterises the whole\nworld in ONE call through the span buffer: near-to-far, memset only what is\nstill uncovered. Uses the gfx.mcam camera. No depth buffer is touched, so\nanything drawn after this must painter-order itself.",
+      params: [],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 850
+    },
+    {
+      name: "gfx.vfill",
+      namespace: "gfx",
+      short: "vfill",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vfill(x0,y0,z0, x1,y1,z1, block)"
+        }
+      ],
+      prose: "Inclusive box. Worldgen goes through\nhere: a Lua triple loop over even a small world blows the per-callback\ninstruction budget long before it finishes.",
+      params: [
+        {
+          name: "x0",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y0",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "z0",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "x1",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "y1",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "z1",
+          index: 6,
+          optional: false
+        },
+        {
+          name: "block",
+          index: 7,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 728
+    },
+    {
+      name: "gfx.vget",
+      namespace: "gfx",
+      short: "vget",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vget(x,y,z)",
+          returns: "block"
+        }
+      ],
+      prose: "The block id at one cell, 0 for air. Reading\noutside the world is 0 too rather than an error, so collision code can\nprobe freely at the edges without bounds-checking first.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "z",
+          index: 3,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 719
+    },
+    {
+      name: "gfx.vline",
+      namespace: "gfx",
+      short: "vline",
+      group: "Shapes and text",
+      signatures: [
+        {
+          text: "gfx.vline(x, y0, y1, color)"
+        }
+      ],
+      prose: "Flat vertical line, inclusive endpoints.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y0",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "y1",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "color",
+          index: 4,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 227
+    },
+    {
+      name: "gfx.vload",
+      namespace: "gfx",
+      short: "vload",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vload(name)",
+          returns: "bool"
+        }
+      ],
+      prose: "Persist the whole block world\n(engine v17). Names are [a-z0-9_].\nIt goes beside the app's documents (not in the app directory, which an\nupdate replaces), so a child's world survives a reinstall. The grid\nrun-length-encodes itself in C: 368,640 cells is three orders of magnitude\npast the 4KB document cap and far past what Lua could walk on device.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      since: 17,
+      needsAssets: false,
+      stub: false,
+      line: 810
+    },
+    {
+      name: "gfx.vlod",
+      namespace: "gfx",
+      short: "vlod",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vlod(dist)"
+        }
+      ],
+      prose: "How far out gfx.vpattern textures still draw (default 40\nblocks). A textured span runs a per-pixel loop where a flat one is a\nmemset, so this is the app's dial between how far the texture reads and\nhow much of the frame the far field costs. 0 = texture everything.",
+      params: [
+        {
+          name: "dist",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 822
+    },
+    {
+      name: "gfx.vpattern",
+      namespace: "gfx",
+      short: "vpattern",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vpattern(id, accent, mask)"
+        }
+      ],
+      prose: "A 4x4 texture for one block type, the SAME\non all six faces so a block is recognisable from any angle. mask is 16 bits\nread row-major (bit 0 = top-left); a set bit draws `accent` instead of the\nface colour. Both take the lighting tier, so a patterned block shades like a\nflat one. Omit it (or pass mask 0) and the block fills at memset speed.",
+      params: [
+        {
+          name: "id",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "accent",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "mask",
+          index: 3,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 762
+    },
+    {
+      name: "gfx.vray",
+      namespace: "gfx",
+      short: "vray",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vray(x,y,z, dx,dy,dz [, maxd])",
+          returns: "hx,hy,hz, px,py,pz | nil"
+        }
+      ],
+      prose: "The first\nsolid cell along the ray and the empty cell just before it (break here,\nplace there). This is the crosshair.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "z",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "dx",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "dy",
+          index: 5,
+          optional: false
+        },
+        {
+          name: "dz",
+          index: 6,
+          optional: false
+        },
+        {
+          name: "maxd",
+          index: 7,
+          optional: true,
+          default: "8"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 831
+    },
+    {
+      name: "gfx.vsave",
+      namespace: "gfx",
+      short: "vsave",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vsave(name)",
+          returns: "bool"
+        }
+      ],
+      prose: "Persist the whole block world\n(engine v17). Names are [a-z0-9_].\nIt goes beside the app's documents (not in the app directory, which an\nupdate replaces), so a child's world survives a reinstall. The grid\nrun-length-encodes itself in C: 368,640 cells is three orders of magnitude\npast the 4KB document cap and far past what Lua could walk on device.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      since: 17,
+      needsAssets: false,
+      stub: false,
+      line: 802
+    },
+    {
+      name: "gfx.vset",
+      namespace: "gfx",
+      short: "vset",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vset(x,y,z,block)"
+        }
+      ],
+      prose: "0 = air. Marks the chunk (and any neighbour whose\nboundary faces change) for remesh; the next gfx.vdraw does the work.",
+      params: [
+        {
+          name: "x",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "y",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "z",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "block",
+          index: 4,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 710
+    },
+    {
+      name: "gfx.vterrain",
+      namespace: "gfx",
+      short: "vterrain",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vterrain(heights, top, sub, deep [, subdepth])"
+        }
+      ],
+      prose: "Extrude a w*d byte\nstring of column heights (row-major) in ONE call. This is how a world gets\nbuilt: Lua does the noise, C does the filling.",
+      params: [
+        {
+          name: "heights",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "top",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "sub",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "deep",
+          index: 4,
+          optional: false
+        },
+        {
+          name: "subdepth",
+          index: 5,
+          optional: true,
+          default: "3"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 738
+    },
+    {
+      name: "gfx.vworld",
+      namespace: "gfx",
+      short: "vworld",
+      group: "Block worlds",
+      signatures: [
+        {
+          text: "gfx.vworld{w=,d=,h=,chunk=}",
+          returns: "bool"
+        }
+      ],
+      prose: "Allocate the block grid. One per app\nrun; the world dies with the app. Cells are 1 byte, 0 = air, so 128x128x48\nis 786KB of PSRAM where the same grid as a Lua table would blow the 2MB\nheap. w and d must be multiples of chunk.",
+      params: [
+        {
+          name: "cfg",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [
+        {
+          name: "w",
+          default: "64.0"
+        },
+        {
+          name: "d",
+          default: "64.0"
+        },
+        {
+          name: "h",
+          default: "32.0"
+        },
+        {
+          name: "chunk",
+          default: "16.0"
+        }
+      ],
+      since: 17,
+      needsAssets: false,
+      stub: false,
+      line: 697
+    },
+    {
+      name: "gfx.zclear",
+      namespace: "gfx",
+      short: "zclear",
+      group: "Meshes",
+      signatures: [
+        {
+          text: "gfx.zclear()"
+        }
+      ],
+      prose: "Reset the depth buffer to far (engine v16). For mesh scenes\nwith no ground pass (cards, mirrors) that still want z-tested models.",
+      params: [],
+      fields: [],
+      since: 16,
+      needsAssets: false,
+      stub: false,
+      line: 414
+    },
+    {
+      name: "vupp.ambience",
+      namespace: "vupp",
+      short: "ambience",
+      group: "Sound",
+      signatures: [
+        {
+          text: "vupp.ambience(name [, vol 0..0.5])"
+        }
+      ],
+      prose: "Loop assets/sfx/{name}.wav as a soft\nbackground bed; vupp.ambience() (or nil) stops it. Engine v15. Idempotent:\ncalling every frame with the same bed is free, so apps can just assert the\nambience for their current scene in update(). Exempt from the politeness\nlimiter, the engine governs it instead: ONE bed at a time, volume hard-\ncapped soft (0.5), stopped by pause/suspend like every app voice (the\nper-frame re-assert restarts it after resume).",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: true,
+          constraint: "sfx name only (no path, no extension)"
+        },
+        {
+          name: "vol",
+          index: 2,
+          optional: true,
+          default: "0.35"
+        }
+      ],
+      fields: [],
+      since: 15,
+      needsAssets: true,
+      stub: false,
+      line: 1032
+    },
+    {
+      name: "vupp.btn",
+      namespace: "vupp",
+      short: "btn",
+      group: "Input",
+      signatures: [
+        {
+          text: "vupp.btn(b)",
+          returns: "bool"
+        }
+      ],
+      prose: 'Is button `b` held right now? One of "up", "down",\n"left", "right", "a", "b", "select"; an unknown name raises. "start" never\nreaches an app, because the engine owns it for the pause menu (engine v7).\nThere\nis no event queue: read the pad every frame.',
+      params: [],
+      fields: [],
+      since: 7,
+      needsAssets: false,
+      stub: false,
+      line: 74
+    },
+    {
+      name: "vupp.btnp",
+      namespace: "vupp",
+      short: "btnp",
+      group: "Input",
+      signatures: [
+        {
+          text: "vupp.btnp(b)",
+          returns: "bool"
+        }
+      ],
+      prose: "Was `b` pressed on THIS frame? The edge, not the\nlevel. Jumping, firing and moving a menu cursor want this one; walking\nwants vupp.btn, and using btn where btnp belongs is why a menu selection\nflies past six entries on one press.",
+      params: [],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 84
+    },
+    {
+      name: "vupp.canvas.save",
+      namespace: "vupp.canvas",
+      short: "save",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.canvas.save(doc_key, payload [, rect{x,y,w,h}])",
+          returns: "bool"
+        }
+      ],
+      prose: 'Captures the CURRENT app canvas (or the `rect` region, canvas coords) ->\npalette RGB565 -> 2x nearest-neighbor upscale (nicer viewing on phones) ->\nJPEG beside the document as {doc_key}.jpg -> docstore document\n{doc_type "drawing", payload, assets {"image":"{doc_key}.jpg"}, status\n"queued", origin "device"} -> doc.put sync job (uploads the JPEG, upserts\nthe row). Re-saving the same key overwrites: the row id stays stable (like\nthe store doc), so newest wins locally and in the cloud (409->PATCH path).\nBad usage (oversized payload, bad key/rect) raises; I/O trouble returns\nfalse (logged) so a full SD can\'t crash the app mid-masterpiece.',
+      params: [
+        {
+          name: "doc_key",
+          index: 1,
+          optional: false,
+          constraint: "key may not contain '/'"
+        },
+        {
+          name: "payload",
+          index: 2,
+          optional: false
+        },
+        {
+          name: "rect",
+          index: 3,
+          optional: true,
+          constraint: "rect outside the canvas"
+        }
+      ],
+      fields: [
+        {
+          name: "x",
+          default: "required"
+        },
+        {
+          name: "y",
+          default: "required"
+        },
+        {
+          name: "w",
+          default: "required"
+        },
+        {
+          name: "h",
+          default: "required"
+        }
+      ],
+      capability: "canvas",
+      needsAssets: false,
+      stub: false,
+      line: 1283
+    },
+    {
+      name: "vupp.date",
+      namespace: "vupp",
+      short: "date",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.date()"
+        }
+      ],
+      prose: "The real-world clock (engine v15): local date/time off the\nbattery-backed RTC through the policy tz table. Returns nil until the clock\nhas plausibly been set (epoch >= 2020), apps MUST handle nil (grow-style\nper-visit fallbacks) since a fresh device may never have synced.",
+      params: [],
+      fields: [],
+      since: 15,
+      needsAssets: false,
+      stub: false,
+      line: 1066
+    },
+    {
+      name: "vupp.docs.get",
+      namespace: "vupp.docs",
+      short: "get",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.docs.get(doc_type, key)",
+          returns: "payload table | nil"
+        }
+      ],
+      prose: "One document from the\napp's own namespace. nil when there is no such key, and also when the key\nexists but holds a different doc_type.",
+      params: [
+        {
+          name: "doc_type",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "key",
+          index: 2,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1193
+    },
+    {
+      name: "vupp.docs.list",
+      namespace: "vupp.docs",
+      short: "list",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.docs.list(doc_type)",
+          returns: "array of documents"
+        }
+      ],
+      prose: "Every document of that\ntype in the app's own namespace, including the ones a parent pushed\n(origin tells them apart). Each entry is {key, doc_type, status, origin,\npayload}. Bounded to the newest 32, like the Messages screen.",
+      params: [
+        {
+          name: "doc_type",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1213
+    },
+    {
+      name: "vupp.docs.of",
+      namespace: "vupp.docs",
+      short: "of",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.docs.of(app_ref)"
+        }
+      ],
+      prose: "READ another app's documents (no isolation between\napps by design, docs/11; writes stay in the own namespace).",
+      params: [
+        {
+          name: "app_ref",
+          index: 1,
+          optional: false,
+          constraint: "app_ref must be 'system:{name}' or 'lib:{slug}'"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1220
+    },
+    {
+      name: "vupp.docs.put",
+      namespace: "vupp.docs",
+      short: "put",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.docs.put(doc_type, key, payload [, asset_path])"
+        }
+      ],
+      prose: "Upsert into the\napp's own namespace + queue the doc.put sync job.",
+      params: [
+        {
+          name: "doc_type",
+          index: 1,
+          optional: false,
+          constraint: "doc_type too long"
+        },
+        {
+          name: "key",
+          index: 2,
+          optional: false,
+          constraint: "key may not contain '/'"
+        },
+        {
+          name: "payload",
+          index: 3,
+          optional: false
+        },
+        {
+          name: "asset_path",
+          index: 4,
+          optional: true
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1140
+    },
+    {
+      name: "vupp.emit",
+      namespace: "vupp",
+      short: "emit",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.emit(name, payload)"
+        }
+      ],
+      prose: `A note for the parent's activity feed, the thing
+a parent actually opens the phone app to see. Emit at genuine milestones
+such as "finished_level", "spelled_word" or "drawing.saved", never per frame.
+payload is an optional small table; more than 512 bytes of JSON raises.`,
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "payload",
+          index: 2,
+          optional: true
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1384
+    },
+    {
+      name: "vupp.import",
+      namespace: "vupp",
+      short: "import",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.import(name)",
+          returns: "whatever lib/{name}.lua returns"
+        }
+      ],
+      prose: "The only module\nloader there is, since require/dofile/loadfile/load are removed from the\nsandbox. Names are [a-z0-9_] with no path and no extension.\n\nResults are cached for the life of the app, which is the point and also the\ntrap: whatever a module returns is pinned in the 2 MB Lua heap until the app\nexits, so a lib file holding a big generated table costs that memory for the\nwhole run (see gfx.mload's .vmesh form for the way out). A module that\nreturns nothing caches as true, so it still only runs once.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1510
+    },
+    {
+      name: "vupp.on_command",
+      namespace: "vupp",
+      short: "on_command",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.on_command(fn)"
+        }
+      ],
+      prose: "Register fn(name, args) -> result table for the\ncommands the manifest declares (docs/11-app-contract.md). The runtime\nhandles acknowledgement and expiry; the app just answers.",
+      params: [
+        {
+          name: "fn",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1244
+    },
+    {
+      name: "vupp.on_document",
+      namespace: "vupp",
+      short: "on_document",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.on_document(fn)"
+        }
+      ],
+      prose: "Register fn(doc) for documents the PARENT pushes\nwhile the app is running: a new colouring page, a word list, a photo. The\nruntime calls it; the app never does. doc has the same shape vupp.docs.list\nreturns.",
+      params: [
+        {
+          name: "fn",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1233
+    },
+    {
+      name: "vupp.quit",
+      namespace: "vupp",
+      short: "quit",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.quit()"
+        }
+      ],
+      prose: "Return to the launcher. Rarely the right call: since engine\nv7 the START pause menu is how a child leaves an app, and an app that quits\nitself takes that choice away mid-play.",
+      params: [],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1492
+    },
+    {
+      name: "vupp.rand",
+      namespace: "vupp",
+      short: "rand",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.rand()",
+          returns: "float in [0,1)"
+        },
+        {
+          text: "vupp.rand(n)",
+          returns: "integer in 1..n"
+        }
+      ],
+      prose: "xorshift64* seeded once per run, which is the reason to prefer it over\nmath.random: a bug you hit reproduces on the next launch instead of\nevaporating. math.random works and is not removed, but it does not have\nthat property.",
+      params: [
+        {
+          name: "n",
+          index: 1,
+          optional: true,
+          constraint: "n must be >= 1"
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1470
+    },
+    {
+      name: "vupp.sfx",
+      namespace: "vupp",
+      short: "sfx",
+      group: "Sound",
+      signatures: [
+        {
+          text: "vupp.sfx(name [, vol 0..1])"
+        }
+      ],
+      prose: "Play assets/sfx/{name}.wav (16 kHz mono s16,\nloudness-normalized at publish). Cached per app run.",
+      params: [
+        {
+          name: "name",
+          index: 1,
+          optional: false,
+          constraint: "sfx name only (no path, no extension)"
+        },
+        {
+          name: "vol",
+          index: 2,
+          optional: true,
+          default: "0.8"
+        }
+      ],
+      fields: [],
+      needsAssets: true,
+      stub: false,
+      line: 997
+    },
+    {
+      name: "vupp.store.get",
+      namespace: "vupp.store",
+      short: "get",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.store.get(key [, default])",
+          returns: "the stored value, or `default` when the"
+        }
+      ],
+      prose: "Key was never written.",
+      params: [
+        {
+          name: "key",
+          index: 1,
+          optional: false
+        },
+        {
+          name: "default",
+          index: 2,
+          optional: true
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1439
+    },
+    {
+      name: "vupp.store.set",
+      namespace: "vupp.store",
+      short: "set",
+      group: "Saving and data",
+      signatures: [
+        {
+          text: "vupp.store.set(key, value)"
+        }
+      ],
+      prose: `Value is nil | bool | number | string | small
+table. Sugar over a single 'store' document underneath, so a high score is
+parent-visible like everything else and survives both leaving the app and
+reinstalling it. It also survives an edit, which is worth remembering while
+testing a "best score".
+
+The WHOLE store has to serialize into one document payload, so the size
+check happens on the write rather than at flush time: an oversized value is
+rolled back and raises, instead of quietly losing the save later. "store"
+is a reserved document key. Keep it to a high score or the furthest level;
+this is a save file, not a database.`,
+      params: [
+        {
+          name: "key",
+          index: 1,
+          optional: false
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1411
+    },
+    {
+      name: "vupp.time",
+      namespace: "vupp",
+      short: "time",
+      group: "Everything else",
+      signatures: [
+        {
+          text: "vupp.time()",
+          returns: "number"
+        }
+      ],
+      prose: "Seconds of play since this app started, pauses\nexcluded. Not a wall clock and not comparable across runs: it is the clock\nto drive animation and timers off. vupp.date() is the real-world one.",
+      params: [],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 1457
+    },
+    {
+      name: "vupp.tone",
+      namespace: "vupp",
+      short: "tone",
+      group: "Sound",
+      signatures: [
+        {
+          text: "vupp.tone(freq, ms [, vol 0..1 [, wave]])"
+        }
+      ],
+      prose: 'A voice on the mixer. Waves:\n"tri" (default, soft), "sine", "square" (chiptune), "saw", "noise".',
+      params: [
+        {
+          name: "freq",
+          index: 1,
+          optional: false,
+          constraint: "freq 20..8000 Hz"
+        },
+        {
+          name: "ms",
+          index: 2,
+          optional: false,
+          constraint: "duration 1..5000 ms"
+        },
+        {
+          name: "vol",
+          index: 3,
+          optional: true,
+          default: "0.6"
+        },
+        {
+          name: "wave",
+          index: 4,
+          optional: true,
+          default: '"tri"'
+        }
+      ],
+      fields: [],
+      needsAssets: false,
+      stub: false,
+      line: 934
+    },
+    {
+      name: "vupp.touch",
+      namespace: "vupp",
+      short: "touch",
+      group: "Input",
+      signatures: [
+        {
+          text: "vupp.touch()",
+          returns: "nil | {x, y, held} in canvas coordinates"
+        }
+      ],
+      prose: 'Held is true the\nwhole time a finger is down (apps do their own press-edge detection).\nOnly injected when the manifest declares the "touch" capability.',
+      params: [],
+      fields: [],
+      capability: "touch",
+      needsAssets: false,
+      stub: false,
+      line: 93
+    }
+  ],
+  values: [
+    {
+      name: "gfx.w",
+      prose: 'Canvas width in pixels: 480 with "hires": true in app.json, 240 without. A plain number, not a call, so reading it is free.',
+      since: 14
+    },
+    {
+      name: "gfx.h",
+      prose: "Canvas height in pixels: 320 hires, 160 legacy. A plain number, not a call.",
+      since: 14
+    }
+  ],
+  globals: [
+    {
+      name: "print",
+      prose: "Goes to the device log tagged with the app slug. A child never sees it; the bench devconsole does."
+    }
+  ],
+  removed: [
+    "dofile",
+    "loadfile",
+    "load",
+    "collectgarbage"
+  ],
+  stdlib: [
+    "base",
+    "math",
+    "string",
+    "table",
+    "utf8"
+  ]
+};
+
+// ../app-reference/src/engine-api.ts
+var ENGINE_MODEL = engine_api_default;
+var ENGINE_CALLS = ENGINE_MODEL.calls;
+function callMarkdown(c) {
+  const flags = [
+    c.capability ? `**capability \`${c.capability}\` required**` : "",
+    c.needsAssets ? "**needs asset files**" : "",
+    c.stub ? "**stub, does nothing**" : "",
+    c.since ? `engine v${c.since}` : ""
+  ].filter(Boolean);
+  const sig = c.signatures.map((s) => `    ${s.text}${s.returns ? ` -> ${s.returns}` : ""}`).join("\n");
+  const args = c.params.length ? `
+  Arguments: ${c.params.map(
+    (p) => `${p.index}. \`${p.name}\`${p.optional ? ` (optional${p.default && p.default !== "undefined" ? `, default ${p.default}` : ""})` : ""}`
+  ).join("; ")}` : "";
+  const fields = c.fields.length ? `
+  Table fields: ${c.fields.map((f) => `${f.name}${f.default === "required" ? "" : `=${f.default}`}`).join(", ")}` : "";
+  const out = [`### ${c.name}`, "", sig, ""];
+  if (flags.length) out.push(flags.join(" | "), "");
+  out.push(c.prose);
+  if (args) out.push("", args.trimStart());
+  if (fields) out.push("", fields.trimStart());
+  return out.join("\n");
+}
+function engineApiFull() {
+  const groups = [];
+  for (const group of [...new Set(ENGINE_CALLS.map((c) => c.group))]) {
+    const calls = ENGINE_CALLS.filter((c) => c.group === group);
+    groups.push(`## ${group}
+
+${calls.map(callMarkdown).join("\n\n")}`);
+  }
+  return [
+    `# The complete engine surface (engine v${ENGINE_MODEL.engineVersion})`,
+    "",
+    `Every call an app can make, generated from ${ENGINE_MODEL.source}. If a call is`,
+    "here it exists on the device; if it is not here, it does not exist.",
+    "",
+    "This is the reference, not the tutorial. `vupp docs api` is the subset to",
+    "start from and explains why. Come here for exact arguments and defaults.",
+    "",
+    "Three things stop a call from working even though it exists:",
+    "",
+    "- **capability required**: not injected unless app.json lists it in",
+    '  "capabilities". Calling it without that is a nil-index crash.',
+    "- **needs asset files**: reads a file from the app package. With no such file",
+    "  it is a silent no-op or returns false, never an error. The app runs and",
+    "  nothing appears, which is harder to debug than a crash.",
+    "- **stub**: safe to call, does nothing.",
+    "",
+    `## gfx values (not calls)
+
+${ENGINE_MODEL.values.map((v) => `- \`${v.name}\` - ${v.prose}`).join("\n")}`,
+    "",
+    ...groups,
+    "",
+    "## The sandbox",
+    "",
+    `Only these stdlib modules are opened: ${ENGINE_MODEL.stdlib.join(", ")}.`,
+    "There is no io, os, package, debug or coroutine; they are nil rather than",
+    "restricted. These base functions are removed as well:",
+    "",
+    `    ${ENGINE_MODEL.removed.join(", ")}`,
+    "",
+    ...ENGINE_MODEL.globals.map((g) => `\`${g.name}\` does exist: ${g.prose}`)
+  ].join("\n");
+}
+
 // src/project.ts
 import { existsSync as existsSync3 } from "fs";
 import { mkdir as mkdir2, readdir, readFile as readFile2, writeFile as writeFile2 } from "fs/promises";
@@ -5934,7 +9390,7 @@ async function readProject(dir) {
   if (!files["app.json"] || !files["main.lua"]) {
     const missing = [!files["app.json"] && "app.json", !files["main.lua"] && "main.lua"].filter(Boolean).join(" and ");
     throw new ProjectError(
-      `${root} is not a Vupp app \u2014 ${missing} ${missing.includes("and") ? "are" : "is"} missing. Run \`vupp init\` to start one.`
+      `${root} is not a Vupp app, ${missing} ${missing.includes("and") ? "are" : "is"} missing. Run \`vupp init\` to start one.`
     );
   }
   return files;
@@ -6197,16 +9653,16 @@ async function cmdPackage(ctx, dir, opts) {
       files: Object.keys(files).sort(),
       play_url: PLAY_URL,
       // The zip is not the end of the job. Somebody still has to find out
-      // whether a child enjoys it, and that cannot be checked from here — so
+      // whether a child enjoys it, and that cannot be checked from here, so
       // the result says how, in the words to hand over.
-      next: `Tell them the game is ready, and OFFER to let them play it now. The fastest route is \`vupp play ${out}\` \u2014 it opens a browser with the game already running, no file picker involved. To send it to somebody else, give them ${out} plus ${PLAY_URL}, where they drop the file in and play with nothing installed. Then ask what they want changed, and iterate.`
+      next: `Tell them the game is ready, and OFFER to let them play it now. The fastest route is \`vupp play ${out}\`, it opens a browser with the game already running, no file picker involved. To send it to somebody else, give them ${out} plus ${PLAY_URL}, where they drop the file in and play with nothing installed. Then ask what they want changed, and iterate.`
     },
     () => [
       `Wrote ${out} (${Math.round(bytes.length / 102.4) / 10} KB)`,
       "",
       `Play it now:      vupp play ${out}`,
       `Send it to them:  ${out} plus ${PLAY_URL}`,
-      "                  (they drop the file in \u2014 nothing to install)",
+      "                  (they drop the file in, nothing to install)",
       "",
       "To put it on a device: open the zip in the Vupp app and publish from there.",
       "Publishing is a parent-only step by design."
@@ -6285,9 +9741,9 @@ var BODY = (mode) => `
   <div id="name">Vupp</div>
   <div id="screen-area">
     <canvas id="canvas"></canvas>
-    <div id="boot">Starting the Vupp\u2026</div>
+    <div id="boot">Starting the Vupp...</div>
   </div>
-  <div id="status">${mode === "zip" ? "Choose a game to play." : "Starting the Vupp\u2026"}</div>
+  <div id="status">${mode === "zip" ? "Choose a game to play." : "Starting the Vupp..."}</div>
 ${mode === "zip" ? `
   <div id="drop">
     <p style="margin:0 0 10px">Drop the game's <strong>.zip</strong> here, or</p>
@@ -6351,7 +9807,7 @@ function status(text, bad) {
   el.className = bad ? 'bad' : ''
 }
 function setName(title) {
-  document.title = title ? title + ' \u2014 Vupp' : 'Vupp'
+  document.title = title ? title + ', Vupp' : 'Vupp'
   const el = document.getElementById('name')
   if (el) el.textContent = title || 'Vupp'
 }
@@ -6359,7 +9815,7 @@ function setName(title) {
 let started = false
 listeners.push((msg) => {
   if (msg.type === 'ready') { started = true; onReady() }
-  else if (msg.type === 'running') status('Playing ' + (msg.title || '') + ' \u2014 arrows to move, Z and X for A and B')
+  else if (msg.type === 'running') status('Playing ' + (msg.title || '') + ', arrows to move, Z and X for A and B')
   else if (msg.type === 'crash') status('It crashed in ' + msg.where + ': ' + msg.message, true)
   else if (msg.type === 'refused') status('The engine would not start it: ' + msg.reason, true)
 })
@@ -6412,7 +9868,7 @@ for (const el of document.querySelectorAll('[data-btn]')) {
   el.addEventListener('pointerleave', release)
 }
 
-/* Touch on the screen itself \u2014 apps declaring the "touch" capability read this.
+/* Touch on the screen itself, apps declaring the "touch" capability read this.
  * Coordinates are the 480x320 panel space the firmware expects. */
 const screenCanvas = document.getElementById('canvas')
 function panelXY(e) {
@@ -6457,12 +9913,12 @@ async function load(reason) {
 async function watch() {
   try {
     const next = (await (await fetch('/__vupp/version', { cache: 'no-store' })).json()).version
-    if (started && next !== version) await load('Reloading \u2014 the game changed')
+    if (started && next !== version) await load('Reloading, the game changed')
   } catch { /* the CLI stopped; keep playing what is loaded */ }
   setTimeout(watch, 700)
 }
 
-function onReady() { load('Loading the game\u2026').then(watch) }
+function onReady() { load('Loading the game...').then(watch) }
 `;
 var ZIP_LOADER = `
 /* Minimal zip reader. The archive is written by fflate at level 6, so entries
@@ -6497,7 +9953,7 @@ async function unzip(buffer) {
     p += 46 + nameLen + extraLen + commentLen
 
     /* The local header repeats the name and extra lengths, and they are NOT
-     * always the same as the central directory's \u2014 the data starts after the
+     * always the same as the central directory's, the data starts after the
      * local copy. */
     const lNameLen = view.getUint16(localAt + 26, true)
     const lExtraLen = view.getUint16(localAt + 28, true)
@@ -6517,7 +9973,7 @@ async function unzip(buffer) {
 }
 
 /* Desktop zip tools wrap the contents in a folder named after it, so a game
- * zipped by hand arrives as "Frog Hop/app.json". Peel one common prefix \u2014 the
+ * zipped by hand arrives as "Frog Hop/app.json". Peel one common prefix, the
  * same forgiveness the phone app's importer applies, and the single most likely
  * way this fails in someone's hands otherwise. */
 function unwrap(files) {
@@ -6537,7 +9993,7 @@ let pending = null
 
 async function loadZip(file) {
   try {
-    status('Opening ' + file.name + '\u2026')
+    status('Opening ' + file.name + '...')
     const all = unwrap(await unzip(await file.arrayBuffer()))
     const files = {}
     for (const [name, body] of Object.entries(all)) if (SOURCE.test(name)) files[name] = body
@@ -6549,8 +10005,8 @@ async function loadZip(file) {
     setName(title)
     document.getElementById('drop').classList.add('done')
 
-    if (started) { status('Loading ' + title + '\u2026'); post({ type: 'write_and_run', files }) }
-    else { pending = files; status('Loading ' + title + '\u2026') }
+    if (started) { status('Loading ' + title + '...'); post({ type: 'write_and_run', files }) }
+    else { pending = files; status('Loading ' + title + '...') }
   } catch (err) {
     status(err.message || String(err), true)
   }
@@ -6728,7 +10184,7 @@ ${lintFailure(result)}
         files = next;
         title = titleOf(next);
         version = nextHash;
-        progress(ctx, `reloaded \u2014 ${title}`);
+        progress(ctx, `reloaded, ${title}`);
       } catch {
       }
     }, 250);
@@ -6748,7 +10204,7 @@ ${lintFailure(result)}
       "",
       `  Play it:  ${url}`,
       "",
-      `  ${title} \u2014 arrows move, Z is A, X is B, Enter is START.`,
+      `  ${title}, arrows move, Z is A, X is B, Enter is START.`,
       fromZip ? "  The game is already loaded. Re-package and this tab catches up." : "  Edits reload automatically.",
       "  Press Ctrl+C when you are done.",
       ""
@@ -6861,7 +10317,7 @@ var SimSession = class _SimSession {
   }
   /**
    * Resolve on `ready`, with the same ping fallback the app uses. The page
-   * announces itself, so the polling normally does nothing — it is here because
+   * announces itself, so the polling normally does nothing, it is here because
    * a dropped `ready` leaves every later message queued forever with no symptom
    * beyond a sim that never answers.
    */
@@ -6939,14 +10395,14 @@ var SimSession = class _SimSession {
           this.settle({
             ok: false,
             where: "blank",
-            error: "The app runs without crashing but the screen is a single flat colour \u2014 nothing is being drawn, or everything is being drawn outside the canvas (480x320 for hires apps). Check the coordinates in vupp.draw."
+            error: "The app runs without crashing but the screen is a single flat colour, nothing is being drawn, or everything is being drawn outside the canvas (480x320 for hires apps). Check the coordinates in vupp.draw."
           });
           break;
         }
         this.settle({
           ok: true,
           warnings: changes <= 1 ? [
-            `Nothing on screen changed across ${samples} samples over ${WATCH_MS / 1e3}s. A still picture reads as broken to a small child \u2014 give it something that moves on its own from the very first frame, before any input.`
+            `Nothing on screen changed across ${samples} samples over ${WATCH_MS / 1e3}s. A still picture reads as broken to a small child, give it something that moves on its own from the very first frame, before any input.`
           ] : void 0
         });
         break;
@@ -7143,12 +10599,12 @@ async function cmdPlaytest(ctx, dir, opts) {
         frames,
         // Said in the output rather than left implicit: the whole point of this
         // command is that somebody looks at the pictures.
-        next: frames.length ? "Open every frame above and say what you actually see before deciding this passed. When it looks right, hand it to a person: `vupp play` is the only thing that answers whether a child would enjoy it." : 'No frames were captured \u2014 add "shot": true to the steps where the answer would be visible.'
+        next: frames.length ? "Open every frame above and say what you actually see before deciding this passed. When it looks right, hand it to a person: `vupp play` is the only thing that answers whether a child would enjoy it." : 'No frames were captured, add "shot": true to the steps where the answer would be visible.'
       },
       () => {
         const lines = [
           `Goal: ${input.goal}`,
-          `Moves on its own before any input: ${result.moves_on_its_own ? "yes" : "NO \u2014 a still screen reads as broken to a small child"}`
+          `Moves on its own before any input: ${result.moves_on_its_own ? "yes" : "NO, a still screen reads as broken to a small child"}`
         ];
         for (const s of result.steps ?? []) {
           const pressed = s.buttons?.length ? s.buttons.join("+") : "wait";
@@ -7218,7 +10674,10 @@ var ALWAYS = {
   manifest: MANIFEST,
   skeleton: SKELETON
 };
-var DOC_TOPICS = [...FULL_TOPICS, ...REFERENCE_TOPICS];
+var ON_REQUEST = {
+  "api-full": engineApiFull
+};
+var DOC_TOPICS = [...FULL_TOPICS, ...Object.keys(ON_REQUEST), ...REFERENCE_TOPICS];
 async function cmdDocs(ctx, topic) {
   if (!topic) {
     const everything = [
@@ -7233,6 +10692,12 @@ async function cmdDocs(ctx, topic) {
   }
   if (topic in ALWAYS) {
     const reference = ALWAYS[topic];
+    emit(ctx, { topic, reference }, () => reference);
+    return 0;
+  }
+  const onRequest = ON_REQUEST[topic];
+  if (onRequest) {
+    const reference = onRequest();
     emit(ctx, { topic, reference }, () => reference);
     return 0;
   }
@@ -7302,7 +10767,7 @@ function formatWarnings(checked) {
 }
 
 // src/index.ts
-var USAGE = `vupp \u2014 build and playtest games for the Vupp handheld
+var USAGE = `vupp, build and playtest games for the Vupp handheld
 
   vupp doctor [--refresh]            fetch the simulator and a browser, check everything
   vupp init [dir] [--from <slug>]    start an app (optionally from a reference app)
@@ -7313,7 +10778,7 @@ var USAGE = `vupp \u2014 build and playtest games for the Vupp handheld
   vupp run [dir]                     put it on the simulator and report what happened
   vupp playtest [dir] --goal <text> --steps <json|file>
                                      press buttons, write PNG frames, report what changed
-  vupp play [dir|game.zip]           PLAY IT YOURSELF in a browser \u2014 real keyboard,
+  vupp play [dir|game.zip]           PLAY IT YOURSELF in a browser, real keyboard,
                                      already loaded, reloads on every edit. Not headless.
   vupp package [dir] [-o out.zip]    the zip a parent imports into the Vupp app
 
@@ -7412,7 +10877,7 @@ async function main(argv) {
         note: values.note
       });
     // Reserved so the shape of the CLI does not change when they land. v1 stops
-    // at a zip on purpose — see commands/package.ts.
+    // at a zip on purpose, see commands/package.ts.
     case "login":
     case "publish":
       process.stderr.write(

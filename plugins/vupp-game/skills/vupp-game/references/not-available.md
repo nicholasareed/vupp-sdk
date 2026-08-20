@@ -10,8 +10,17 @@ these produces a crash, not a warning. There is no fallback and no polyfill.
     require, dofile, loadfile, load, collectgarbage
     os.* (os.time, os.clock, os.date), io.*, package.*, debug.*, coroutine.*
     love.*, cls(), pset(), spr(), flr(), rnd(), print(x, y, c), btn(0)
-    gfx.print, gfx.pixel, gfx.blit, gfx.font, gfx.sprite, gfx.image
-    vupp.key, vupp.mouse, vupp.btn("start")
+    gfx.print, gfx.pixel, gfx.blit, gfx.font
+    vupp.key, vupp.mouse
+
+  REAL, but useless here: gfx.sprite, gfx.image, gfx.ssprite, gfx.texcol,
+  gfx.tload, gfx.terrain, gfx.floor, vupp.sfx, vupp.ambience. They exist on the
+  device and do not raise. They read art or audio files this toolchain cannot
+  produce, so with no such file they draw nothing and return false. That is
+  worse than a crash, because the app runs and the screen stays empty.
+
+  vupp.btn("start") is real and always false: the engine owns START for the
+  pause menu, so it never reaches an app.
 
   USE INSTEAD:
     os.time()      -> vupp.time()
@@ -20,4 +29,4 @@ these produces a crash, not a warning. There is no fallback and no polyfill.
     rnd(n)         -> vupp.rand(n)
 
   math, string, table and utf8 ARE available in full. math.random works, but
-  prefer vupp.rand — it is seeded per run so bugs reproduce.
+  prefer vupp.rand, which is seeded per run so bugs reproduce.

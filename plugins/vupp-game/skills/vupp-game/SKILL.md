@@ -1,6 +1,6 @@
 ---
 name: vupp-game
-description: Build a game or toy for the Vupp kids' handheld — a 240x160 screen, a d-pad and A/B buttons, running Lua. Use when asked to make, change, or test a Vupp app or game. Covers the engine API, the reference apps, running it on the real firmware, playtesting it with real screenshots, and handing it to a parent to install.
+description: Build a game or toy for the Vupp kids' handheld: a 480x320 screen, a d-pad and A/B buttons, running Lua. Use when asked to make, change, or test a Vupp app or game. Covers the engine API, the reference apps, running it on the real firmware, playtesting it with real screenshots, and handing it to a parent to install.
 ---
 
 # Building a Vupp game
@@ -9,10 +9,10 @@ The Vupp is a handheld for children roughly 3 to 8 years old. A game for it is
 Lua 5.4 plus a manifest, running on a 240x160 landscape screen with a d-pad,
 A and B, and a speaker.
 
-You have a real simulator. It is not a mock — it is the device's own firmware
+You have a real simulator. It is not a mock. It is the device's own firmware
 compiled to WebAssembly, running the same Lua VM, the same renderer and the same
 limits as the hardware a child will hold. When it says the app crashed in
-`draw`, that is the device talking.
+`draw`, that is the device talking, not a simulation of it.
 
 ## Setup
 
@@ -42,7 +42,7 @@ game is technically fine and genuinely unplayable.
 - **Losing must look silly, not sad.** No "GAME OVER", no failure sound that
   scolds. The frog falls in the water with a funny plop and hops back on.
 - **Something must move on the very first frame, before any input.** A still
-  screen reads as broken to a five-year-old — they will not press anything to
+  screen reads as broken to a five-year-old, who will not press anything to
   find out. The playtest checks this explicitly and reports it.
 
 ## The loop
@@ -56,7 +56,14 @@ vupp docs palette --json         # choosing colours that work
 vupp docs motion --json          # what makes a game feel alive to a small child
 vupp docs state --json           # saving, time, randomness
 vupp docs budget --json          # the per-frame limits and what blows them
+vupp docs blocks --json          # the voxel engine: 3D with no art files
+vupp docs meshes --json          # 3D models built from a Lua table
+vupp docs api-full --json        # every call, generated from the firmware
 ```
+
+`vupp docs` with no topic is the place to start. `api-full` is the complete
+surface with exact arguments and defaults, also browseable at
+<https://nicholasareed.github.io/vupp-sdk/engine/>.
 
 There are also eleven apps that already ship on the hardware, written against
 this exact engine under the same constraints you have:
@@ -67,8 +74,8 @@ vupp reference show maze --json
 vupp reference show maze main.lua --json
 ```
 
-Read one when the request resembles something in the library — a maze, a
-falling-blocks game, a rhythm toy, a spelling game — or when you are about to
+Read one when the request resembles something in the library: a maze, a
+falling-blocks game, a rhythm toy, a spelling game, or when you are about to
 write a kind of motion or layout you have not written here before. One or two
 reads is a normal amount.
 
@@ -104,16 +111,16 @@ vupp run --json
 
 `vupp run` reports one of:
 
-- `ok: true` — it is running. It may still carry `warnings`; act on them.
-- `where: "check"` — vupp-lint refused it and nothing ran. The message names
+- `ok: true`: it is running. It may still carry `warnings`; act on them.
+- `where: "check"`: vupp-lint refused it and nothing ran. The message names
   the exact problem.
-- `where: "load"` — the engine declined to start it (bad manifest, missing
+- `where: "load"`: the engine declined to start it (bad manifest, missing
   `main.lua`, engine too old).
-- `where: "init" | "update" | "draw"` — the app's own Lua error, verbatim.
-- `where: "blank"` — it ran and drew one flat colour. Almost always coordinates
+- `where: "init" | "update" | "draw"`: the app's own Lua error, verbatim.
+- `where: "blank"`: it ran and drew one flat colour. Almost always coordinates
   outside the 240x160 canvas, or a draw that never happens.
 
-### 5. Playtest — and actually look
+### 5. Playtest: and actually look
 
 **Every build ends with a playtest. No exceptions.** You have not finished until
 you have pressed the buttons and looked at the screen.
@@ -128,7 +135,7 @@ vupp playtest --json \
   ]'
 ```
 
-Buttons: `up down left right a b select`. START never reaches the app — the
+Buttons: `up down left right a b select`. START never reaches the app, the
 engine owns it for the pause menu. Holds under 80 ms are invisible to the input
 poll and get raised to 80.
 
@@ -147,14 +154,14 @@ shipped to a real child before:
 Two things in the result that are easy to misread:
 
 - `moves_on_its_own` is sampled **before any button is pressed**. If it is
-  false, fix that before anything else — it is the single rule the product
+  false, fix that before anything else. It is the single rule the product
   hangs on.
 - `screen_changed` is **not** evidence a button worked. On a game that animates
   by itself it is true no matter what you pressed. The frames are the evidence.
 
 If the pictures show something wrong, fix it and play it again.
 
-### 6. Let them play it — always offer this
+### 6. Let them play it: always offer this
 
 A scripted playtest tells you the game *works*. It cannot tell you whether it is
 any **fun**, and that is the only question that actually matters. So a build is
@@ -168,7 +175,7 @@ vupp play                 # the project directory
 vupp play frog-hop.zip    # or a packaged game
 ```
 
-Serves the game and prints a URL to open. The game is **already loaded** — there
+Serves the game and prints a URL to open. The game is **already loaded**: there
 is no file picker and nothing to drag, which matters because you cannot drop a
 file on a page. Real keyboard (arrows move, `Z` is A, `X` is B, `Enter` is
 START), an on-screen pad for phones and touch, and **it reloads every time you
@@ -176,7 +183,7 @@ edit a file**, so they can play, say "the frog is too slow", and be playing the
 fix seconds later without restarting anything. It keeps running until Ctrl+C.
 
 It prints a URL rather than only opening a window, so it works over SSH and
-inside containers too — pass `--port 4173` if you need a predictable one to
+inside containers too, pass `--port 4173` if you need a predictable one to
 forward.
 
 Give a `vupp play <zip>` run the same treatment when you want to check that what
@@ -188,21 +195,21 @@ you are about to send someone is really what they will get.
 vupp package -o frog-hop.zip --author "Grandma" --note "for Sam"
 ```
 
-Send that file along with **<https://nicholasareed.github.io/vupp-sdk/play/>** —
+Send that file along with **<https://nicholasareed.github.io/vupp-sdk/play/>**,
 they drop the zip onto that page and play immediately, with nothing installed
 and no account. The zip is unpacked in their own browser and never uploaded
 anywhere. This is the route for a grandparent, a therapist, or a parent who is
 somewhere else; use `vupp play` yourself.
 
 To put it on a real device the zip goes into the Vupp phone app and a parent
-publishes it from there. **You cannot publish it and neither can this CLI** —
+publishes it from there. **You cannot publish it and neither can this CLI**,
 that is a parent-only action, on purpose. Say so plainly rather than leaving
 them hunting for a deploy step.
 
 #### How to end the build
 
 Finish with a short reply in plain language: what it is, what to press, one
-thing you chose that they might want changed — and then **ask whether they want
+thing you chose that they might want changed, and then **ask whether they want
 to play it now**. If they cannot code, do not mention file names, function names
 or Lua.
 
@@ -210,13 +217,13 @@ Something like:
 
 > Frog Hop is ready. Logs drift across the river and A hops the frog between
 > them; miss one and there is a splash and a giggle, then straight back on. I
-> made the logs fairly slow so a four-year-old can land them — easy to speed up.
+> made the logs fairly slow so a four-year-old can land them, easy to speed up.
 >
 > **Want to play it now?** I will start it and give you a link. Anything you
 > want changed I can do while you are still playing.
 
 If they say yes, run `vupp play`, then tell them the URL and the controls. When
-they come back with "it is too fast" or "make the frog blue", just change it —
+they come back with "it is too fast" or "make the frog blue", just change it,
 the page reloads on its own, so they never have to stop playing.
 
 ## Things that will bite you
@@ -225,21 +232,25 @@ Read `vupp docs not-available --json` in full before your first game. The
 highlights:
 
 - **ASCII 32..127 only.** The font has no other glyphs. A star, an arrow, an
-  accent or an emoji renders as literal `?` characters — `"★ 70"` comes out as
+  accent or an emoji renders as literal `?` characters, `"★ 70"` comes out as
   `?70?`. Draw badges and hearts with `gfx.circle` / `gfx.tri` / `gfx.rect`.
 - **Colours are palette indices, not hex.** Indexing past the end of your own
   palette draws *nothing at all*, with no error.
 - **No `require`, `os.*`, `io.*`, `load`, `coroutine.*`.** Use `vupp.import`,
   `vupp.time`, `vupp.rand`.
 - **No `gfx.sprite` / `gfx.image` / `vupp.sfx`.** They are real engine calls but
-  need asset files this toolchain cannot produce. Shapes and text only — many
-  of the best apps in the library are shapes only.
+  need art or audio files this toolchain cannot produce. They do not raise: they
+  draw nothing and return false, so the app runs and the screen stays empty.
+- **3D is available, and needs no files.** The voxel engine (`gfx.vworld`,
+  `gfx.vterrain`, `gfx.vdraw`, ...) and the mesh engine via `gfx.mload` with a
+  Lua *table* are both fully procedural. See `vupp docs blocks` and
+  `vupp docs meshes`, and read the `blockworld` reference app.
 - **Do not allocate in `vupp.draw`.** No table constructors, no string
   concatenation, no closures per frame. Build once in `vupp.init` and mutate.
   Each of init/update/draw must finish in 250 ms and ~3M Lua instructions;
   blowing either is a crash, not a slowdown.
 - **`gfx.text` sizes are separate glyph sets, not scales.** Advance is
-  `4 * size` px per character. Centre with `x = (240 - #str * 4 * size) / 2` —
+  `4 * size` px per character. Centre with `x = (240 - #str * 4 * size) / 2`,
   do the arithmetic, do not eyeball it. Anything a child reads wants size 2
   minimum.
 

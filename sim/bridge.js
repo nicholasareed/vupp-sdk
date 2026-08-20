@@ -1,10 +1,10 @@
-/* Vupp Studio device bridge — configures the Emscripten Module before
+/* Vupp Studio device bridge, configures the Emscripten Module before
  * vupp_sim.js loads, then exposes the whole simulator to React Native as a
  * JSON message channel (docs/17-studio.md).
  *
  * Division of labour: RN owns the project (source files, chat, persistence)
  * and the input controls; this page owns the WASM VM and the canvas. The hot
- * reload loop is two messages — write_app then relaunch — because
+ * reload loop is two messages, write_app then relaunch, because
  * vupp_apprt_start re-reads app.json, main.lua, the palette and the sprite
  * sheet from disk into a fresh lua_State on every launch, and for lib: refs
  * "is this app installed" is literally "does /sd/apps/<slug>/app.json exist"
@@ -12,7 +12,7 @@
  *
  * Beyond the hot-reload loop this side also answers the two questions the log
  * stream cannot: `shot` returns the app canvas as a PNG, and `play` walks a
- * scripted input sequence and reports what happened — which is what lets the
+ * scripted input sequence and reports what happened, which is what lets the
  * studio agent press a button and look at the result instead of guessing.
  *
  * Wire format, both directions: one JSON object per message, { type, ... }.
@@ -21,19 +21,25 @@
  * here → RN:  window.ReactNativeWebView.postMessage(JSON.stringify(obj))
  */
 
-'use strict'
-
 const CANVAS_W = 480
 const CANVAS_H = 320
-/* The indexed app canvas behind that panel — what vupp_sim_canvas_rgba hands
+/* The indexed app canvas behind that panel, what vupp_sim_canvas_rgba hands
  * back, and the coordinate space every number in the app's Lua is written in. */
-/* Classic app canvas; engine v14 hires apps render 480x320 — appW()/appH()
+/* Classic app canvas; engine v14 hires apps render 480x320, appW()/appH()
  * read the live size from the sim so shots track whichever app is running. */
 function appW() {
-  try { return Module.ccall('vupp_sim_canvas_w', 'number', [], []) } catch { return 240 }
+  try {
+    return Module.ccall('vupp_sim_canvas_w', 'number', [], [])
+  } catch {
+    return 240
+  }
 }
 function appH() {
-  try { return Module.ccall('vupp_sim_canvas_h', 'number', [], []) } catch { return 160 }
+  try {
+    return Module.ccall('vupp_sim_canvas_h', 'number', [], [])
+  } catch {
+    return 160
+  }
 }
 const DRAFT_SLUG = 'draft'
 const DRAFT_DIR = `/.sim/sd/apps/${DRAFT_SLUG}`
@@ -85,12 +91,12 @@ var Module = {
 
 /* "[apprt] draft CRASHED in update: main.lua:12: attempt to index a nil value" */
 const RE_CRASH = /^\[apprt\] (\S+) CRASHED in ([^:]+): (.*)$/
-/* "[apprt] suspend draft (screen.change) — flushing store" */
+/* "[apprt] suspend draft (screen.change), flushing store" */
 const RE_SUSPEND = /^\[apprt\] suspend (\S+) \(([^)]+)\)/
 /* "[apprt] running lib:draft ('Frog Hop') @ 30 fps +touch" */
 const RE_RUNNING = /^\[apprt\] running lib:(\S+) \('(.*)'\) @ (\d+) fps/
 /* "[apprt] frametime lib:draft window n=144 fps=28.8 update=119/300us
- *  draw=705/1300us blit=684/1300us frame=1628/2900us" — printed every ~5 s of
+ *  draw=705/1300us blit=684/1300us frame=1628/2900us", printed every ~5 s of
  * wall time by the host build, and once more on suspend with tag "final". */
 const RE_FRAMETIME =
   /^\[apprt\] frametime lib:(\S+) (\S+) n=(\d+) fps=([\d.]+) update=(\d+)\/\d+us draw=(\d+)\/\d+us blit=\d+\/\d+us frame=(\d+)\//
@@ -129,7 +135,7 @@ function onLogLine(line) {
      * WebView. An absolute threshold would tell the model every app is too slow
      * on a phone and none of them are on a laptop. Reporting it needs the
      * per-session calibration against a reference app that docs/17-studio.md
-     * describes — until then this is surfaced for humans only. */
+     * describes, until then this is surfaced for humans only. */
     send({
       type: 'frametime',
       tag: m[2],
@@ -153,7 +159,7 @@ function onLogLine(line) {
  * fires for reasons the creator didn't cause: port_web.c drops every HTTP
  * call, so the sync engine flaps out of CLAIMED, the poll wants the boot
  * screen, and the app they are in the middle of building disappears behind
- * the launcher. Re-assert the launch when that happens — nobody opened this
+ * the launcher. Re-assert the launch when that happens, nobody opened this
  * screen to look at a launcher.
  *
  * Deliberately narrow: only `screen.change`. A pause-menu exit, quiet hours
@@ -166,7 +172,7 @@ function onSuspended(reason) {
   send({ type: 'suspended', reason })
   if (!pinned || reason !== 'screen.change') return
   if (repins >= REPIN_MAX) {
-    /* Something is holding the device off the app screen for good — say so
+    /* Something is holding the device off the app screen for good, say so
      * once instead of relaunching forever. */
     send({ type: 'unpinned', reason })
     pinned = false
@@ -247,7 +253,7 @@ function writeApp(files) {
 /* --- input ----------------------------------------------------------------- */
 /* RN owns the buttons; it sends the combined VUPP_PAD_* bitmask, the same
  * value --script and the on-screen pad in apps-internal/play push. RN is also
- * responsible for the 80ms minimum hold — the sim polls the pad every ~30ms,
+ * responsible for the 80ms minimum hold, the sim polls the pad every ~30ms,
  * so a sub-poll tap would vanish. */
 
 function pad(mask) {
@@ -269,7 +275,7 @@ function touch(x, y, down) {
  * The one failure neither the log stream nor vupp-lint can see: an app that
  * runs at 30 fps, never crashes, and shows the child nothing. Sample the
  * indexed canvas over a couple of seconds and let RN decide what the numbers
- * mean — this side stays a dumb sensor.
+ * mean, this side stays a dumb sensor.
  *
  * `distinct` <= 1 is a canvas painted one flat colour. An unchanging `hash`
  * across every sample means nothing moved, which the studio prompt explicitly
@@ -322,7 +328,7 @@ function watchCanvas(id, forMs, everyMs) {
  *
  * The browser does the encoding: putImageData into an offscreen 2D canvas and
  * toDataURL. That avoids shipping a PNG encoder, and it deliberately does NOT
- * read Module.canvas — that is a WebGL surface, so toDataURL on it needs
+ * read Module.canvas, that is a WebGL surface, so toDataURL on it needs
  * preserveDrawingBuffer and would capture the upscaled panel with its status
  * bar rather than the 240x160 the app's coordinates mean.
  *
@@ -332,7 +338,8 @@ function watchCanvas(id, forMs, everyMs) {
 let shotCanvas = null
 
 function shotPngB64() {
-  const w = appW(), h = appH()
+  const w = appW(),
+    h = appH()
   if (!shotCanvas || shotCanvas.width !== w || shotCanvas.height !== h) {
     shotCanvas = document.createElement('canvas')
     shotCanvas.width = w
@@ -352,7 +359,7 @@ function shotPngB64() {
 /* --- playtest --------------------------------------------------------------
  * The one thing the studio could never do: press a button and look at what
  * happened. The native sim's --script is fixed at launch, but this side has
- * live pad injection, so a playtest is a genuine closed loop — the model asks
+ * live pad injection, so a playtest is a genuine closed loop, the model asks
  * for a sequence, sees the frames, and asks for a different one.
  *
  * Like watch_canvas, this stays a dumb sensor: it walks the steps, samples,
@@ -429,7 +436,7 @@ function unlockAudio() {
 
 /* --- launch ---------------------------------------------------------------- */
 
-/* Never call into the VM from inside a print handler — that fires *during* a
+/* Never call into the VM from inside a print handler, that fires *during* a
  * frame, and vupp_ui_launch tears down the running lua_State. Queue to a
  * microtask so we always re-enter between frames. */
 function relaunch(id) {
@@ -479,7 +486,7 @@ const handlers = {
   },
 
   /* Walk a scripted input sequence and report what happened, with frames.
-   * RN resolves button names to pad masks before sending — the PAD bitmask
+   * RN resolves button names to pad masks before sending, the PAD bitmask
    * lives in one place (apps/mobile/src/studio/bridge.ts) and this side stays
    * a sensor. Answers with one `play_result`. */
   play: (msg) => {
@@ -492,7 +499,7 @@ const handlers = {
 
   touch: (msg) => touch(msg.x | 0, msg.y | 0, !!msg.down),
 
-  /* "Start fresh" — drop the draft's saved progress. The docstore is outside
+  /* "Start fresh", drop the draft's saved progress. The docstore is outside
    * the app dir, so writeApp alone never clears it. */
   reset_store: (msg) => {
     rmTree('/.sim/sd/docs/lib:draft')

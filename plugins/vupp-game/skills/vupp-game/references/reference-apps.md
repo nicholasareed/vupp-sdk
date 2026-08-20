@@ -12,6 +12,7 @@ shapes and text, no sprite sheets, no sound files. Open one with
 | `abc-trace` | ABC Trace | learning | 604 | built-in 16 |
 | `asteroids` | Space Pop | game | 410 | built-in 16 |
 | `beat-bop` | Beat Bop | music | 423 | built-in 16 |
+| `blockworld` | BlockWorld | game | 759 | 255 colours |
 | `drift` | Drift | creative | 325 | 16 colours |
 | `fish-count` | Fish Count | learning | 449 | 16 colours |
 | `maze` | Maze | game | 613 | built-in 16 |
@@ -21,14 +22,15 @@ shapes and text, no sprite sheets, no sound files. Open one with
 | `spelling` | Spelling | learning | 882 | built-in 16 |
 | `tetris` | Blocks! | game | 496 | built-in 16 |
 
-- **abc-trace** — tracks abc.letter, abc.alphabet; uses the touchscreen
-- **asteroids** — tracks space.pops, space.golden
-- **beat-bop** — tracks beat.streak, beat.tier; uses the touchscreen
-- **drift** — tracks calm.sleep, calm.session; uses the touchscreen
-- **fish-count** — tracks math.round; uses the touchscreen
-- **maze** — tracks maze.level_done, maze.all_done
-- **music-maker** — tracks music.session, music.tune_saved, music.song_done; uses the touchscreen
-- **ripple** — tracks calm.quiet_time; uses the touchscreen
-- **runner** — tracks dash.finished, dash.all_levels
-- **spelling** — tracks spelling.word, spelling.tier_up; uses the touchscreen
-- **tetris** — tracks blocks.cleared, blocks.milestone, blocks.best
+- **abc-trace**: tracks abc.letter, abc.alphabet; uses the touchscreen
+- **asteroids**: tracks space.pops, space.golden
+- **beat-bop**: tracks beat.streak, beat.tier; uses the touchscreen
+- **blockworld**: uses the touchscreen
+- **drift**: tracks calm.sleep, calm.session; uses the touchscreen
+- **fish-count**: tracks math.round; uses the touchscreen
+- **maze**: tracks maze.level_done, maze.all_done
+- **music-maker**: tracks music.session, music.tune_saved, music.song_done; uses the touchscreen
+- **ripple**: tracks calm.quiet_time; uses the touchscreen
+- **runner**: tracks dash.finished, dash.all_levels
+- **spelling**: tracks spelling.word, spelling.tier_up; uses the touchscreen
+- **tetris**: tracks blocks.cleared, blocks.milestone, blocks.best

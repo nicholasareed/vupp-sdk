@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vupp — build a game for a kids' handheld</title>
+    <title>Vupp: build a game for a kids' handheld</title>
     <meta
       name="description"
       content="Everything an AI needs to build, run and playtest a game for the Vupp handheld. Start here."
@@ -27,12 +27,24 @@
       ol li, ul li { margin: .35rem 0; }
       .rule { border-left: 3px solid rgba(127,127,127,.4); padding-left: 1rem; margin: 1.25rem 0; }
       footer { margin-top: 4rem; opacity: .6; font-size: .875rem; }
+      nav.top {
+        display: flex; flex-wrap: wrap; gap: .9rem 2rem;
+        margin: 1rem 0 2rem; padding-bottom: 1rem;
+        border-bottom: 1px solid rgba(127,127,127,.28);
+      }
+      nav.top a { font-weight: 600; font-size: .9375rem; }
+      nav.top small { display: block; opacity: .6; font-size: .8125rem; margin-top: .1rem; }
     </style>
   </head>
   <body>
-    <h1>Vupp — build a game for a kids' handheld</h1>
+    <h1>Vupp: build a game for a kids' handheld</h1>
+    <nav class="top">
+      <div><a href="engine/">Engine reference</a><small>every call, from the firmware</small></div>
+      <div><a href="arcade/">Arcade</a><small>the built-in games, in your browser</small></div>
+      <div><a href="play/">Player</a><small>open a .zip somebody sent you</small></div>
+    </nav>
     <p class="lede">
-      The Vupp is a handheld for children roughly 3 to 8 years old: a 160&times;240 screen,
+      The Vupp is a handheld for children roughly 3 to 8 years old: a 480&times;320 screen,
       a d-pad, A and B, a speaker, and Lua 5.4. This page is everything needed to build a
       game for it, run it on the device's real firmware, and playtest it.
     </p>
@@ -46,11 +58,11 @@ vupp doctor</code></pre>
     <p>
       <code>vupp doctor</code> downloads the simulator (~1.7&nbsp;MB, verified by checksum) and
       finds a browser to run it in. It needs no configuration and no API key. Run it before
-      anything else — it is the only slow step, and doing it up front means it does not look
-      like a hang later.
+      anything else, because it is the only slow step and doing it up front means it does
+      not look like a hang later.
     </p>
 
-    <h3>2. Read the engine reference — do not skip this</h3>
+    <h3>2. Read the engine reference. Do not skip this.</h3>
     <pre><code>vupp docs --json</code></pre>
     <p>
       This engine is <strong>not</strong> LÖVE, PICO-8, Roblox or plain Lua. Reaching for
@@ -59,11 +71,20 @@ vupp doctor</code></pre>
       to branch on instead of prose to parse, and progress goes to stderr so the JSON stays
       one clean document.
     </p>
+    <p>
+      <code>vupp docs</code> teaches the subset a first game should use, and why.
+      <a href="engine/">The engine reference</a> is the other half: every call that exists on
+      the device, generated from the firmware source, with the arguments and defaults read
+      out of the C rather than transcribed. Go there when you need to know exactly what an
+      argument does, or whether a call exists at all. There is a
+      <a href="engine/engine.json">machine-readable copy</a> of the whole surface if you
+      would rather fetch it in one request than read three pages.
+    </p>
     <p>Worked examples that already ship on the hardware, under exactly your constraints:</p>
     <pre><code>vupp reference list --json
 vupp reference show maze --json</code></pre>
     <p>
-      Read one when the request resembles something in the library — a maze, a
+      Read one when the request resembles something in the library: a maze, a
       falling-blocks game, a rhythm toy, a spelling game. One or two is a normal amount.
     </p>
 
@@ -74,30 +95,30 @@ vupp init my-game --from runner           # start from a reference app</code></p
     <h3>4. Write a small running version, then check it</h3>
     <p>
       Write <code>app.json</code> and <code>main.lua</code>. Get something on screen before
-      making it good — a running toy you can test beats a perfect design you cannot.
+      making it good. A running toy you can test beats a perfect design you cannot.
     </p>
     <pre><code>vupp lint --json     # runs before anything else; nothing is written if it fails
 vupp run --json</code></pre>
     <p><code>vupp run</code> answers with one of:</p>
     <ul>
-      <li><code>ok: true</code> — it is running. It may still carry <code>warnings</code>; act on them.</li>
-      <li><code>where: "check"</code> — the static check refused it and nothing ran.</li>
-      <li><code>where: "load"</code> — the engine declined to start it (bad manifest, missing <code>main.lua</code>).</li>
-      <li><code>where: "init" | "update" | "draw"</code> — the app's own Lua error, from the device, verbatim.</li>
-      <li><code>where: "blank"</code> — it ran and drew one flat colour. Almost always coordinates outside the 160&times;240 canvas, or a draw that never happens.</li>
+      <li><code>ok: true</code>: it is running. It may still carry <code>warnings</code>; act on them.</li>
+      <li><code>where: "check"</code>: the static check refused it and nothing ran.</li>
+      <li><code>where: "load"</code>: the engine declined to start it (bad manifest, missing <code>main.lua</code>).</li>
+      <li><code>where: "init" | "update" | "draw"</code>: the app's own Lua error, from the device, verbatim.</li>
+      <li><code>where: "blank"</code>: it ran and drew one flat colour. Almost always coordinates outside the 480&times;320 canvas, or a draw that never happens.</li>
     </ul>
 
-    <h3>5. Playtest — and actually look at the pictures</h3>
+    <h3>5. Playtest, and actually look at the pictures</h3>
     <pre><code>vupp playtest --json \
   --goal "the frog lands on the log and the splash reads well" \
   --steps '[{"label":"title","wait_ms":900,"shot":true},
             {"press":["a"],"hold_ms":120,"wait_ms":600,"label":"hop","shot":true}]'</code></pre>
     <p>
-      Buttons: <code>up down left right a b select</code>. START never reaches the app — the
+      Buttons: <code>up down left right a b select</code>. START never reaches the app, because the
       engine owns it for the pause menu.
     </p>
     <p>
-      It writes PNGs of the 160&times;240 canvas and returns their paths.
+      It writes PNGs of the 480&times;320 canvas and returns their paths.
       <strong>Open every one of them and say what you actually see.</strong> The numbers
       cannot tell you the score is drawn on top of the player. All of these have shipped to
       a real child before: text running off the edge, the player drawn behind the
@@ -107,7 +128,7 @@ vupp run --json</code></pre>
     <div class="rule">
       <p>
         <code>moves_on_its_own</code> is sampled <strong>before any button is pressed</strong>.
-        If it is false, fix that first — it is the rule the whole product hangs on.
+        If it is false, fix that first. It is the rule the whole product hangs on.
       </p>
       <p>
         <code>screen_changed</code> is <strong>not</strong> evidence a button worked. On a game
@@ -116,7 +137,7 @@ vupp run --json</code></pre>
       </p>
     </div>
 
-    <h3>6. Let them play it &mdash; always offer this</h3>
+    <h3>6. Let them play it. Always offer this.</h3>
     <p>
       A scripted playtest tells you the game <em>works</em>. It cannot tell you whether it is
       any <strong>fun</strong>, and that is the only question that actually matters. A build
@@ -127,57 +148,57 @@ vupp run --json</code></pre>
 vupp play frog-hop.zip    # or a packaged game</code></pre>
     <p>
       Serves the game and prints a URL to open. The game is <strong>already loaded</strong>
-      &mdash; there is no file picker and nothing to drag, which matters because an AI cannot
-      drop a file onto a page. Real keyboard &mdash; arrows move, <code>Z</code> is A,
-      <code>X</code> is B, <code>Enter</code> is START &mdash; plus an on-screen pad for
+      so there is no file picker and nothing to drag, which matters because an AI cannot
+      drop a file onto a page. Real keyboard (arrows move, <code>Z</code> is A,
+      <code>X</code> is B, <code>Enter</code> is START) plus an on-screen pad for
       phones, and <strong>it reloads every time you edit a file</strong>. So they can play,
       say "the frog is too slow", and be playing the fix seconds later without restarting
       anything. It runs until Ctrl+C, and prints a URL rather than only opening a window, so
       it works over SSH and in containers (<code>--port 4173</code> for a predictable one to
       forward).
     </p>
-    <p>To send it to somebody else &mdash; a grandparent, a therapist, a parent who is
+    <p>To send it to somebody else, such as a grandparent, a therapist, or a parent who is
       somewhere else:</p>
     <pre><code>vupp package -o frog-hop.zip --author "Grandma" --note "for Sam"</code></pre>
     <p>
       Send them that file plus <a href="play/">the player page</a>
       (<code>https://nicholasareed.github.io/vupp-sdk/play/</code>). They drop the zip onto it
-      and play immediately &mdash; nothing to install, no account, and the zip is unpacked in
+      and play immediately. Nothing to install, no account, and the zip is unpacked in
       their own browser rather than uploaded anywhere. That page is for a <em>person</em>;
       use <code>vupp play</code> yourself.
     </p>
     <p>
       There is also <a href="arcade/">the arcade</a>
-      (<code>https://nicholasareed.github.io/vupp-sdk/arcade/</code>) &mdash; the whole
+      (<code>https://nicholasareed.github.io/vupp-sdk/arcade/</code>): the whole
       handheld running in the browser with every built-in game preloaded, keyboard or touch.
       Point people there for a feel of what finished Vupp games are like; it is also the
       quality bar the game being built here is aiming at.
     </p>
     <p>
       To put it on a real device, the zip goes into the Vupp phone app and a parent publishes
-      it from there. <strong>You cannot publish it and neither can this CLI</strong> &mdash;
-      that is a parent-only action, on purpose. Say so plainly rather than leaving them
+      it from there. <strong>You cannot publish it and neither can this CLI</strong>.
+      That is a parent-only action, on purpose. Say so plainly rather than leaving them
       hunting for a deploy step.
     </p>
 
     <h3>7. End by asking if they want to play</h3>
     <p>
       Finish with a short reply in plain language: what it is, what to press, one thing you
-      chose that they might want changed &mdash; then ask. Never mention file names, function
+      chose that they might want changed, then ask. Never mention file names, function
       names or Lua.
     </p>
     <div class="rule">
       <p>
         Frog Hop is ready. Logs drift across the river and A hops the frog between them; miss
         one and there is a splash and a giggle, then straight back on. I made the logs fairly
-        slow so a four-year-old can land them &mdash; easy to speed up.
+        slow so a four-year-old can land them, which is easy to speed up.
       </p>
       <p><strong>Want to play it now?</strong> I will start it and give you a link. Anything
         you want changed I can do while you are still playing.</p>
     </div>
     <p>
       If they say yes, run <code>vupp play</code> and tell them the URL and the controls. When
-      they come back with "it is too fast" or "make the frog blue", just change it &mdash; the
+      they come back with "it is too fast" or "make the frog blue", just change it. The
       page reloads on its own, so they never have to stop playing.
     </p>
 
@@ -188,7 +209,7 @@ vupp play frog-hop.zip    # or a packaged game</code></pre>
       <li><strong>No reading required to play.</strong> Shape, colour and motion carry the meaning; text is decoration or a score.</li>
       <li><strong>Big targets, forgiving timing, generous hitboxes.</strong> Small children are imprecise and that is not their fault.</li>
       <li><strong>Losing must look silly, not sad.</strong> No "GAME OVER", no sound that scolds. The frog falls in with a funny plop and hops back on.</li>
-      <li><strong>Something must move on the very first frame, before any input.</strong> A still screen reads as broken to a five-year-old — they will not press anything to find out.</li>
+      <li><strong>Something must move on the very first frame, before any input.</strong> A still screen reads as broken to a five-year-old, who will not press anything to find out.</li>
     </ul>
 
     <h2>Things that will bite you</h2>
@@ -196,7 +217,7 @@ vupp play frog-hop.zip    # or a packaged game</code></pre>
     <ul>
       <li>
         <strong>ASCII 32..127 only.</strong> A star, arrow, accent or emoji renders as literal
-        <code>?</code> characters — <code>"&#9733; 70"</code> comes out as <code>?70?</code>.
+        <code>?</code> characters: <code>"&#9733; 70"</code> comes out as <code>?70?</code>.
         Draw badges and hearts with <code>gfx.circle</code> / <code>gfx.tri</code> / <code>gfx.rect</code>.
       </li>
       <li>
@@ -210,8 +231,16 @@ vupp play frog-hop.zip    # or a packaged game</code></pre>
       </li>
       <li>
         <strong>No <code>gfx.sprite</code> / <code>gfx.image</code> / <code>vupp.sfx</code>.</strong>
-        Real engine calls, but they need asset files this toolchain cannot produce. Shapes and
-        text only — many of the best apps in the library are shapes only.
+        Real engine calls, but they need art or audio files this toolchain cannot produce. They
+        do not raise: they draw nothing and return false, so the app runs and the screen stays
+        empty, which is harder to spot than an error.
+      </li>
+      <li>
+        <strong>3D <em>is</em> available and needs no files.</strong> The voxel engine
+        (<code>gfx.vworld</code>, <code>gfx.vterrain</code>, <code>gfx.vdraw</code>) and the mesh
+        engine via <code>gfx.mload</code> with a Lua <em>table</em> are both fully procedural.
+        <code>vupp docs blocks</code>, <code>vupp docs meshes</code>, and the
+        <code>blockworld</code> reference app.
       </li>
       <li>
         <strong>Do not allocate in <code>vupp.draw</code>.</strong> No table constructors, string
@@ -221,8 +250,8 @@ vupp play frog-hop.zip    # or a packaged game</code></pre>
       <li>
         <strong><code>gfx.text</code> sizes are separate glyph sets, not scales.</strong> Advance
         is <code>4 * size</code> px per character; centre with
-        <code>x = (160 - #str * 4 * size) / 2</code>. Do the arithmetic. Anything a child reads
-        wants size 2 minimum.
+        <code>x = (gfx.w - #str * 4 * size) / 2</code>. Do the arithmetic. Anything a child reads
+        wants size 3, or size 2 for a secondary label.
       </li>
     </ul>
 
@@ -236,14 +265,14 @@ vupp play frog-hop.zip    # or a packaged game</code></pre>
     <h2>Optional: install the skill</h2>
     <p>
       So future sessions do not need this page, a human can run these once in Claude Code
-      (an AI cannot — they are slash commands typed by the user):
+      (an AI cannot, because they are slash commands typed by the user):
     </p>
     <pre><code>/plugin marketplace add nicholasareed/vupp-sdk
 /plugin install vupp-game@vupp</code></pre>
 
     <footer>
       Source: <a href="https://github.com/nicholasareed/vupp-sdk">github.com/nicholasareed/vupp-sdk</a>.
-      This page is generated from the Vupp monorepo — do not edit it here.
+      This page is generated from the Vupp monorepo. Do not edit it here.
     </footer>
   </body>
 </html>

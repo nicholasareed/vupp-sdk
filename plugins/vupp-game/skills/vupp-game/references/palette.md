@@ -17,7 +17,7 @@ made from one that looks default, and it costs nothing but JSON:
     "palette": ["#0d1b2a", "#1b263b", "#415a77", ..., "#ffd166"]
 
 How to build one that works:
-  - Index 0 is the world — gfx.clear(0) is the sky, the water, the room. Pick
+  - Index 0 is the world: gfx.clear(0) is the sky, the water, the room. Pick
     it first and deliberately.
   - A few darks for outlines and shadow, a mid range for surfaces, two or
     three bright accents reserved for the thing the child is meant to look at.
@@ -25,6 +25,6 @@ How to build one that works:
     them read as important.
   - 20-40 entries is plenty; the engine allows more but you will not use them.
 
-Never index past the end of your own array — that draws NOTHING AT ALL, no
+Never index past the end of your own array. That draws NOTHING AT ALL, no
 error, which reads as "my game is broken" and is invisible in the logs. It is
 one of the few bugs a screenshot catches instantly.
