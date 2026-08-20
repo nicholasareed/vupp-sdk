@@ -12,7 +12,7 @@
       "fps": 30,
       "capabilities": [],
       "palette": ["#101828", "#1d2b53", "#7e2553", "#008751", "#ffec27"],
-      "min_engine": 16,
+      "min_engine": 17,
       "hires": true,
       "parent": { "version": 1, "documents": {}, "commands": {}, "events": {} }
     }
